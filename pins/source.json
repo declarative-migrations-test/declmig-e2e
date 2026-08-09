@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "source_repository": "declarative-migrations/declarative-postgres-migrate.rs",
+  "source_commit": "39d1d9da93127145a0d5b4d3e65bb23638f84ca9",
+  "pinned_at": "2026-08-09",
+  "verification": "signed-main-commit"
+}

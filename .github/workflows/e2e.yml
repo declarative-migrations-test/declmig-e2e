@@ -1,0 +1,158 @@
+name: Declarative migrations aggregate E2E
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: declmig-e2e-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      source_commit: ${{ steps.pin.outputs.commit }}
+    steps:
+      - name: Check out aggregate harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+
+      - name: Validate repository mode and immutable source pin
+        run: python3 scripts/validate_repository_config.py
+
+      - name: Export exact source commit
+        id: pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit="$(python3 -c 'import json; print(json.load(open("pins/source.json", encoding="utf-8"))["source_commit"])')"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+  postgres-smoke:
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DPM_E2E_ENGINE: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+      DPM_E2E_WORKFLOW_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    services:
+      postgres:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Check out aggregate harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out exact dpm source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: declarative-migrations/declarative-postgres-migrate.rs
+          ref: ${{ needs.contract.outputs.source_commit }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${{ needs.contract.outputs.source_commit }}"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.97.1'
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: source -> target
+          shared-key: declmig-e2e-postgres
+
+      - name: Ensure PostgreSQL client is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+
+      - name: Build and test exact dpm source
+        working-directory: source
+        shell: bash
+        env:
+          CARGO_TERM_COLOR: always
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          cargo test --locked --lib 2>&1 | tee ../artifacts/source-lib-tests.log
+          cargo test --locked --test fuzz_splitter 2>&1 | tee ../artifacts/source-fuzz-tests.log
+          cargo build --locked --bin dpm 2>&1 | tee ../artifacts/source-build.log
+          ./target/debug/dpm version | tee ../artifacts/dpm-version.txt
+
+      - name: Run diff, verify, apply, and empty post-diff
+        env:
+          PGPASSWORD: postgres
+          DPM_BIN: source/target/debug/dpm
+          DPM_E2E_ADMIN_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+          DPM_E2E_TARGET_URL: postgres://postgres:postgres@127.0.0.1:5432/declmig_target
+        run: bash scripts/run_postgres_smoke.sh source pins/source.json
+
+      - name: Write failure diagnostics
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          {
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "workflow_commit=${DPM_E2E_WORKFLOW_COMMIT}"
+            echo "source_commit=${{ needs.contract.outputs.source_commit }}"
+            echo "engine=${DPM_E2E_ENGINE}"
+            rustc --version || true
+            cargo --version || true
+            git -C source rev-parse HEAD || true
+          } > artifacts/failure-diagnostics.txt
+
+      - name: Upload immutable evidence bundle
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: declmig-e2e-postgres-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: declmig-e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7

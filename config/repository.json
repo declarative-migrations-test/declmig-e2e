@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "repository": "declarative-migrations-test/declmig-e2e",
+  "mode": "candidate-and-destructive-fleet-orchestrator",
+  "source_repository": "declarative-migrations/declarative-postgres-migrate.rs",
+  "source_pin_file": "pins/source.json",
+  "destructive_targets_allowed": true,
+  "required_destructive_target_class": "ephemeral-or-explicitly-disposable",
+  "production_credentials_allowed": false,
+  "production_database_targets_allowed": false,
+  "evidence_consumer": "declarative-migrations/declmig-e2e",
+  "required_jobs": [
+    "contract",
+    "postgres-smoke"
+  ]
+}
