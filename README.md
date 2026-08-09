@@ -10,19 +10,21 @@ This repository certifies an exact `declarative-postgres-migrate.rs` source comm
 The `Declarative migrations aggregate E2E` workflow runs two required jobs:
 
 1. `contract` validates the repository identity, mode, full source commit SHA, production-credential prohibition, fixtures, and configuration digests.
-2. `postgres-smoke` checks out that exact source revision, runs Rust format/strict Clippy/tests, then performs a PostgreSQL `diff` → `verify` → `apply` → empty post-apply diff and live catalog assertions.
+2. `postgres-smoke` checks out that exact source revision, runs its library/property tests, builds the `dpm` binary, and performs a PostgreSQL `diff` → `verify` → `apply` → empty post-apply diff with live catalog assertions.
 
-Evidence is written under `artifacts/` and uploaded with source/workflow identities and SHA-256 digests. Generated evidence and checked-out source are ignored locally and must not be committed.
+Formatting and strict Clippy remain source-repository quality gates. The aggregate harness intentionally does not reformat an immutable historical tree with a newer moving formatter; source commits may be pinned only after their required source CI passes. This repository owns black-box integration and promotion evidence.
+
+Evidence is written under `artifacts/` and uploaded with exact source/workflow commits, the digest-pinned database engine identity, test/build logs, the `dpm` binary SHA-256, and migration artifact digests. Failure runs upload diagnostics separately and never masquerade as passing evidence. Generated evidence and checked-out source are ignored locally and must not be committed.
 
 ## Source updates
 
-Update `pins/source.json` only through a pull request. `source_commit` must be a full lowercase 40-character commit SHA. Never replace it with a branch, tag, abbreviated SHA, or `latest` selector.
+Update `pins/source.json` only through a pull request. `source_commit` must be a full lowercase 40-character commit SHA. Never replace it with a branch, tag, abbreviated SHA, or `latest` selector. A pin update must link the source repository’s successful required checks.
 
 ## Trust boundaries
 
 - Pull-request workflows receive no environment or cloud secrets.
 - Checkout credentials are not persisted.
-- GitHub Actions are pinned by full commit SHA.
+- GitHub Actions, the Rust toolchain, and the PostgreSQL service image are immutable pins.
 - The test repository may target only ephemeral or explicitly disposable databases and must reject production credentials/targets.
 - The production repository may consume only exact immutable evidence from the test aggregate.
 - Product service conformance requires one `*-lib-core` persistence authority, API-owned product writes, bounded database-enforced web reads, isolated web-state writes, migrator-only DDL, and Shared Auth without product-domain database ownership.
