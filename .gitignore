@@ -1,6 +1,10 @@
 /artifacts/
 /source/
 /target/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
 *.log
 .env
 .env.*
