@@ -55,7 +55,11 @@ def main() -> int:
         require(repository in {"declarative-migrations/declmig-e2e", "declarative-migrations-test/declmig-e2e"}, "unexpected aggregate repository")
         require(config.get("source_repository") == "declarative-migrations/declarative-postgres-migrate.rs", "source repository mismatch")
         require(config.get("production_credentials_allowed") is False, "production credentials must be forbidden")
-        require(config.get("required_jobs") == ["contract", "postgres-smoke"], "required job set mismatch")
+        require(
+            config.get("required_jobs")
+            == ["contract", "postgres-smoke", "cockroach-smoke", "dual-engine-parity"],
+            "required job set mismatch",
+        )
 
         mode = config.get("mode")
         if repository == "declarative-migrations/declmig-e2e":
@@ -81,9 +85,19 @@ def main() -> int:
         commit = pin.get("source_commit")
         require(isinstance(commit, str) and SHA40.fullmatch(commit) is not None, "source_commit must be a full lowercase SHA")
 
-        fixture_paths = [Path("fixtures/current.sql"), Path("fixtures/desired.sql")]
-        for path in fixture_paths:
-            require(path.is_file() and path.stat().st_size > 0, f"missing fixture {path}")
+        required_paths = [
+            Path("fixtures/current.sql"),
+            Path("fixtures/desired.sql"),
+            Path("scripts/compare_engine_evidence.py"),
+            Path("scripts/run_cockroach_smoke.sh"),
+            Path("scripts/run_engine_smoke.sh"),
+            Path("scripts/run_postgres_smoke.sh"),
+            Path("scripts/validate_ephemeral_urls.py"),
+            Path("tests/test_compare_engine_evidence.py"),
+            Path("tests/test_validate_ephemeral_urls.py"),
+        ]
+        for path in required_paths:
+            require(path.is_file() and path.stat().st_size > 0, f"missing required file {path}")
 
         for text in walk_strings(config) + walk_strings(pin):
             for pattern in SECRET_PATTERNS:

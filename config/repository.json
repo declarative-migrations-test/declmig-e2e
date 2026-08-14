@@ -11,6 +11,8 @@
   "evidence_consumer": "declarative-migrations/declmig-e2e",
   "required_jobs": [
     "contract",
-    "postgres-smoke"
+    "postgres-smoke",
+    "cockroach-smoke",
+    "dual-engine-parity"
   ]
 }
