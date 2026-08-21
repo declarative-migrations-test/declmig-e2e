@@ -160,6 +160,97 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  postgres-lease-invariant:
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DPM_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      DPM_E2E_WORKFLOW_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    services:
+      postgres:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Check out exact dpm source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: declarative-migrations/declarative-postgres-migrate.rs
+          ref: ${{ needs.contract.outputs.source_commit }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${{ needs.contract.outputs.source_commit }}"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.97.1'
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: source -> target
+          shared-key: declmig-e2e-postgres-lease
+
+      - name: Prove lost lease stops the next statement
+        working-directory: source
+        shell: bash
+        env:
+          CARGO_TERM_COLOR: always
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          cargo test --locked --test lease_contract -- --nocapture \
+            2>&1 | tee ../artifacts/source-lease-contract-tests.log
+
+      - name: Write failure diagnostics
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          {
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "workflow_commit=${DPM_E2E_WORKFLOW_COMMIT}"
+            echo "source_commit=${{ needs.contract.outputs.source_commit }}"
+            rustc --version || true
+            cargo --version || true
+            git -C source rev-parse HEAD || true
+          } > artifacts/lease-failure-diagnostics.txt
+
+      - name: Upload lease-invariant evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: declmig-e2e-postgres-lease-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload lease failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: declmig-e2e-postgres-lease-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
   cockroach-smoke:
     needs: contract
     runs-on: ubuntu-24.04
@@ -286,7 +377,7 @@ jobs:
           retention-days: 7
 
   dual-engine-parity:
-    needs: [postgres-smoke, cockroach-smoke]
+    needs: [postgres-smoke, postgres-lease-invariant, cockroach-smoke]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
