@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_repository": "declarative-migrations/declarative-postgres-migrate.rs",
-  "source_commit": "027c81892cafc3693b550eaa74940a17b1705235",
-  "pinned_at": "2026-08-14",
-  "verification": "signed-main-commit"
+  "source_commit": "732a74d17ccf7fe5024dc803d35543e556df1f8b",
+  "pinned_at": "2026-08-21",
+  "verification": "candidate-pr-39-lease-invariant-hardening"
 }

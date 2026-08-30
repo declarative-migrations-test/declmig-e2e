@@ -12,6 +12,7 @@
   "required_jobs": [
     "contract",
     "postgres-smoke",
+    "postgres-lease-invariant",
     "cockroach-smoke",
     "dual-engine-parity"
   ]

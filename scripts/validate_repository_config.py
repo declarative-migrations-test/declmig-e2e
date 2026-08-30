@@ -42,7 +42,11 @@ def walk_strings(value: Any) -> list[str]:
     if isinstance(value, list):
         return [text for item in value for text in walk_strings(item)]
     if isinstance(value, dict):
-        return [text for key, item in value.items() for text in (*walk_strings(key), *walk_strings(item))]
+        return [
+            text
+            for key, item in value.items()
+            for text in (*walk_strings(key), *walk_strings(item))
+        ]
     return []
 
 
@@ -52,38 +56,94 @@ def main() -> int:
         config = load_object(config_path)
         require(config.get("schema_version") == 1, "repository schema_version must be 1")
         repository = config.get("repository")
-        require(repository in {"declarative-migrations/declmig-e2e", "declarative-migrations-test/declmig-e2e"}, "unexpected aggregate repository")
-        require(config.get("source_repository") == "declarative-migrations/declarative-postgres-migrate.rs", "source repository mismatch")
-        require(config.get("production_credentials_allowed") is False, "production credentials must be forbidden")
+        require(
+            repository
+            in {
+                "declarative-migrations/declmig-e2e",
+                "declarative-migrations-test/declmig-e2e",
+            },
+            "unexpected aggregate repository",
+        )
+        require(
+            config.get("source_repository")
+            == "declarative-migrations/declarative-postgres-migrate.rs",
+            "source repository mismatch",
+        )
+        require(
+            config.get("production_credentials_allowed") is False,
+            "production credentials must be forbidden",
+        )
         require(
             config.get("required_jobs")
-            == ["contract", "postgres-smoke", "cockroach-smoke", "dual-engine-parity"],
+            == [
+                "contract",
+                "postgres-smoke",
+                "postgres-lease-invariant",
+                "cockroach-smoke",
+                "dual-engine-parity",
+            ],
             "required job set mismatch",
         )
 
         mode = config.get("mode")
         if repository == "declarative-migrations/declmig-e2e":
             require(mode == "stable-promotion-orchestrator", "production mode mismatch")
-            require(config.get("destructive_targets_allowed") is False, "production aggregate cannot accept destructive targets")
-            require(config.get("test_evidence_required_before_release") is True, "test evidence must precede release")
-            require(config.get("evidence_producer") == "declarative-migrations-test/declmig-e2e", "test evidence producer mismatch")
+            require(
+                config.get("destructive_targets_allowed") is False,
+                "production aggregate cannot accept destructive targets",
+            )
+            require(
+                config.get("test_evidence_required_before_release") is True,
+                "test evidence must precede release",
+            )
+            require(
+                config.get("evidence_producer")
+                == "declarative-migrations-test/declmig-e2e",
+                "test evidence producer mismatch",
+            )
         else:
-            require(mode == "candidate-and-destructive-fleet-orchestrator", "test mode mismatch")
-            require(config.get("destructive_targets_allowed") is True, "test aggregate must permit disposable destructive targets")
-            require(config.get("required_destructive_target_class") == "ephemeral-or-explicitly-disposable", "destructive target class mismatch")
-            require(config.get("production_database_targets_allowed") is False, "production databases are forbidden")
-            require(config.get("evidence_consumer") == "declarative-migrations/declmig-e2e", "evidence consumer mismatch")
+            require(
+                mode == "candidate-and-destructive-fleet-orchestrator",
+                "test mode mismatch",
+            )
+            require(
+                config.get("destructive_targets_allowed") is True,
+                "test aggregate must permit disposable destructive targets",
+            )
+            require(
+                config.get("required_destructive_target_class")
+                == "ephemeral-or-explicitly-disposable",
+                "destructive target class mismatch",
+            )
+            require(
+                config.get("production_database_targets_allowed") is False,
+                "production databases are forbidden",
+            )
+            require(
+                config.get("evidence_consumer")
+                == "declarative-migrations/declmig-e2e",
+                "evidence consumer mismatch",
+            )
 
         github_repository = os.environ.get("GITHUB_REPOSITORY")
         if github_repository:
-            require(github_repository == repository, f"config is for {repository}, runner is {github_repository}")
+            require(
+                github_repository == repository,
+                f"config is for {repository}, runner is {github_repository}",
+            )
 
         pin_path = Path(str(config.get("source_pin_file")))
         pin = load_object(pin_path)
         require(pin.get("schema_version") == 1, "source pin schema_version must be 1")
-        require(pin.get("source_repository") == config.get("source_repository"), "source pin repository mismatch")
+        require(
+            pin.get("source_repository") == config.get("source_repository"),
+            "source pin repository mismatch",
+        )
         commit = pin.get("source_commit")
-        require(isinstance(commit, str) and SHA40.fullmatch(commit) is not None, "source_commit must be a full lowercase SHA")
+        require(
+            isinstance(commit, str) and SHA40.fullmatch(commit) is not None,
+            "source_commit must be a full lowercase SHA",
+        )
 
         required_paths = [
             Path("fixtures/current.sql"),
@@ -97,11 +157,17 @@ def main() -> int:
             Path("tests/test_validate_ephemeral_urls.py"),
         ]
         for path in required_paths:
-            require(path.is_file() and path.stat().st_size > 0, f"missing required file {path}")
+            require(
+                path.is_file() and path.stat().st_size > 0,
+                f"missing required file {path}",
+            )
 
         for text in walk_strings(config) + walk_strings(pin):
             for pattern in SECRET_PATTERNS:
-                require(pattern.search(text) is None, "configuration contains secret-like material")
+                require(
+                    pattern.search(text) is None,
+                    "configuration contains secret-like material",
+                )
 
         summary = {
             "repository": repository,
