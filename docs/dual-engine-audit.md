@@ -20,6 +20,10 @@ Follow-up audit: 2026-08-31
 6. Evidence digests were checked when present, but the comparator did not
    require a complete artifact set or reject an artifact path escaping its
    downloaded evidence directory.
+7. The evolution scenario exposed a CockroachDB product defect: DPM retained
+   `order_status` instead of `app.order_status` for a non-public enum column,
+   so `verify` could not materialize its target replica outside that search
+   path. The aggregate pin now includes the focused source regression and fix.
 
 ## Hardening applied
 
@@ -49,6 +53,9 @@ Follow-up audit: 2026-08-31
   trigger dependency, execute the new behavior, and prove replay remains empty.
 - Require every bootstrap and evolution artifact digest, reject malformed
   digests and evidence-root path escapes, and compare both portable signatures.
+- Normalize only CockroachDB's explicit drop/recreate cycle for a trigger whose
+  function is replaced, while retaining raw per-engine operations and requiring
+  a complete one-to-one dependency cycle.
 - At the original audit, pin DPM to signed commit
   `027c81892cafc3693b550eaa74940a17b1705235`; later candidate pins remain
   governed by `pins/source.json` and the repository contract.

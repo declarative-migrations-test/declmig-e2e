@@ -212,6 +212,45 @@ class CompareEngineEvidenceTests(unittest.TestCase):
         self._refresh_digest(self.cockroach, "evolution-portable-signature.txt")
         self.assertEqual(self._run_compare(), 1)
 
+    def test_accepts_cockroach_replaced_trigger_dependency_cycle(self) -> None:
+        plan_path = self.cockroach / "evolution-plan.json"
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan["changes"].extend(
+            [
+                {
+                    "op": "drop_trigger",
+                    "table": '"app"."orders"',
+                    "name": "orders_audit",
+                    "replaced": True,
+                },
+                {
+                    "op": "create_trigger",
+                    "table": '"app"."orders"',
+                    "key": "app.orders.orders_audit",
+                },
+            ]
+        )
+        plan_path.write_text(json.dumps(plan) + "\n", encoding="utf-8")
+        self._refresh_digest(self.cockroach, "evolution-plan.json")
+        self.assertEqual(self._run_compare(), 0)
+        report = json.loads(self.output.read_text(encoding="utf-8"))
+        self.assertEqual(report["cockroach_evolution_raw_operations"][-2:], ["drop_trigger", "create_trigger"])
+
+    def test_rejects_incomplete_replaced_trigger_dependency_cycle(self) -> None:
+        plan_path = self.cockroach / "evolution-plan.json"
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan["changes"].append(
+            {
+                "op": "drop_trigger",
+                "table": '"app"."orders"',
+                "name": "orders_audit",
+                "replaced": True,
+            }
+        )
+        plan_path.write_text(json.dumps(plan) + "\n", encoding="utf-8")
+        self._refresh_digest(self.cockroach, "evolution-plan.json")
+        self.assertEqual(self._run_compare(), 1)
+
     def test_rejects_missing_required_artifact_digest(self) -> None:
         evidence_path = self.cockroach / "evidence.json"
         evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
