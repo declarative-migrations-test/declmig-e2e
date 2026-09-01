@@ -148,8 +148,11 @@ def main() -> int:
         required_paths = [
             Path("fixtures/current.sql"),
             Path("fixtures/desired.sql"),
+            Path("fixtures/evolution-current.sql"),
+            Path("fixtures/evolution-desired.sql"),
             Path("scripts/compare_engine_evidence.py"),
             Path("scripts/run_cockroach_smoke.sh"),
+            Path("scripts/run_engine_evolution.sh"),
             Path("scripts/run_engine_smoke.sh"),
             Path("scripts/run_postgres_smoke.sh"),
             Path("scripts/validate_ephemeral_urls.py"),

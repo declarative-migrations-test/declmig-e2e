@@ -5,9 +5,34 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+SHA256 = re.compile(r"^[0-9a-f]{64}$")
+REQUIRED_ARTIFACTS = {
+    "catalog-assertions.txt",
+    "data-assertions.txt",
+    "evolution-catalog-assertions.txt",
+    "evolution-constraint-rejection.txt",
+    "evolution-data-assertions.txt",
+    "evolution-enum-default-insert.txt",
+    "evolution-plan.json",
+    "evolution-plan.sql",
+    "evolution-portable-signature.txt",
+    "evolution-post-apply.json",
+    "evolution-post-replay.json",
+    "evolution-preserved-order-id.txt",
+    "evolution-procedure-execution.txt",
+    "plan.json",
+    "plan.sql",
+    "portable-signature.txt",
+    "post-apply.json",
+    "post-replay.json",
+    "preserved-account-id.txt",
+    "procedure-execution.txt",
+}
 
 
 def require(condition: bool, message: str) -> None:
@@ -32,8 +57,19 @@ def verify_evidence(directory: Path, engine_kind: str) -> dict[str, Any]:
     require(evidence.get("result") == "passed", f"{engine_kind} evidence is not passing")
     artifacts = evidence.get("artifacts")
     require(isinstance(artifacts, dict), f"{engine_kind} artifact digest map missing")
+    require(
+        REQUIRED_ARTIFACTS.issubset(artifacts),
+        f"{engine_kind} artifact digest map omits required evidence",
+    )
+    root = directory.resolve()
     for name, expected in artifacts.items():
-        path = directory / name
+        require(isinstance(name, str) and name != "", f"{engine_kind} artifact name is invalid")
+        require(
+            isinstance(expected, str) and SHA256.fullmatch(expected) is not None,
+            f"{engine_kind} artifact digest is invalid: {name}",
+        )
+        path = (directory / name).resolve()
+        require(path.is_relative_to(root), f"{engine_kind} artifact path escapes evidence root: {name}")
         require(path.is_file(), f"{engine_kind} artifact missing: {name}")
         require(digest(path) == expected, f"{engine_kind} artifact digest mismatch: {name}")
     return evidence
@@ -92,11 +128,48 @@ def main() -> int:
             require_empty_plan(directory / "post-apply.json")
             require_empty_plan(directory / "post-replay.json")
 
+        postgres_evolution_ops = plan_ops(postgres_dir / "evolution-plan.json")
+        cockroach_evolution_ops = plan_ops(cockroach_dir / "evolution-plan.json")
+        require(
+            postgres_evolution_ops == cockroach_evolution_ops,
+            "portable evolution plan operation sequence differs",
+        )
+        require(
+            postgres_evolution_ops
+            == [
+                "add_enum_value",
+                "alter_sequence",
+                "set_default",
+                "set_default",
+                "set_not_null",
+                "add_column",
+                "add_column",
+                "add_constraint",
+                "drop_index",
+                "create_index",
+                "drop_view",
+                "create_view",
+                "create_function",
+                "create_function",
+                "create_procedure",
+            ],
+            "portable evolution plan omits or reorders an expected migration operation",
+        )
+        for directory in (postgres_dir, cockroach_dir):
+            require_empty_plan(directory / "evolution-post-apply.json")
+            require_empty_plan(directory / "evolution-post-replay.json")
+
         postgres_signature = postgres_dir / "portable-signature.txt"
         cockroach_signature = cockroach_dir / "portable-signature.txt"
         require(
             postgres_signature.read_bytes() == cockroach_signature.read_bytes(),
             "portable catalog signatures differ",
+        )
+        postgres_evolution_signature = postgres_dir / "evolution-portable-signature.txt"
+        cockroach_evolution_signature = cockroach_dir / "evolution-portable-signature.txt"
+        require(
+            postgres_evolution_signature.read_bytes() == cockroach_evolution_signature.read_bytes(),
+            "portable evolution catalog signatures differ",
         )
 
         report = {
@@ -106,7 +179,9 @@ def main() -> int:
             "workflow_commit": postgres["workflow_commit"],
             "engines": [postgres["engine"], cockroach["engine"]],
             "plan_operations": postgres_ops,
+            "evolution_plan_operations": postgres_evolution_ops,
             "portable_signature_sha256": digest(postgres_signature),
+            "evolution_portable_signature_sha256": digest(postgres_evolution_signature),
             "postgres_evidence_sha256": digest(postgres_dir / "evidence.json"),
             "cockroach_evidence_sha256": digest(cockroach_dir / "evidence.json"),
         }

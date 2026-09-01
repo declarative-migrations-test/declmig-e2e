@@ -7,18 +7,19 @@ This repository certifies an exact `declarative-postgres-migrate.rs` source comm
 
 ## Required certification checks
 
-The `Declarative migrations aggregate E2E` workflow runs four required jobs:
+The `Declarative migrations aggregate E2E` workflow runs five required jobs:
 
 1. `contract` validates the repository identity, mode, full source commit SHA, production-credential prohibition, fixtures, and configuration digests.
 2. `postgres-smoke` checks out that exact source revision, runs its library/property tests, builds the `dpm` binary, and performs the shared migration state machine against PostgreSQL 17.
-3. `cockroach-smoke` independently builds the same source revision and performs the same state machine against CockroachDB 25.2.4.
-4. `dual-engine-parity` verifies both evidence bundles, compares portable plan operations and catalog signatures, and proves that apply plus idempotent replay converged without losing the seeded row.
+3. `postgres-lease-invariant` proves statement-boundary lease ownership and reviewed-plan serialization against PostgreSQL.
+4. `cockroach-smoke` independently builds the same source revision and performs the same state machines against CockroachDB 25.2.4.
+5. `dual-engine-parity` verifies both evidence bundles, compares portable plan operations and catalog signatures, and proves that apply plus idempotent replay converged without losing seeded rows.
 
-The shared state machine is `diff` → `verify` → `apply` → execute the migrated procedure/trigger → empty post-apply diff → replay → empty post-replay diff. Its portable fixture covers tables, identity columns, primary/unique/foreign-key constraints, ordinary and partial expression indexes, a view, a PL/pgSQL function, a stored procedure, and a row-level trigger. See [the dual-engine audit](docs/dual-engine-audit.md) for findings, coverage, and deliberate engine-specific boundaries.
+Each portable scenario runs `diff` → `verify` → `apply` → execute migrated behavior → empty post-apply diff → replay → empty post-replay diff. The bootstrap scenario covers new tables, identity columns, primary/unique/foreign-key constraints, ordinary and partial expression indexes, a view, a PL/pgSQL function, a stored procedure, and a row-level trigger. The object-evolution scenario mutates existing enum, sequence, column, constraint, index, view, function, procedure, and trigger-dependent state while checking generated-column backfill, defaults, constraint rejection, routine behavior, and preserved rows. See [the dual-engine audit](docs/dual-engine-audit.md) for findings, coverage, and deliberate engine-specific boundaries.
 
 Formatting and strict Clippy remain source-repository quality gates. The aggregate harness intentionally does not reformat an immutable historical tree with a newer moving formatter; source commits may be pinned only after their required source CI passes. This repository owns black-box integration and promotion evidence.
 
-Evidence is written under `artifacts/` and uploaded with exact source/workflow commits, the digest-pinned database engine identity, test/build logs, the `dpm` binary SHA-256, migration artifact digests, data-preservation assertions, and a portable catalog signature. The parity job verifies those digests before comparing engines. Failure runs upload diagnostics separately and never masquerade as passing evidence. Generated evidence and checked-out source are ignored locally and must not be committed.
+Evidence is written under `artifacts/` and uploaded with exact source/workflow commits, the digest-pinned database engine identity, test/build logs, the `dpm` binary SHA-256, migration artifact digests, data-preservation and rejection assertions, and portable bootstrap/evolution catalog signatures. The parity job requires the complete artifact set, rejects paths outside each evidence root, and verifies every digest before comparing engines. Failure runs upload diagnostics separately and never masquerade as passing evidence. Generated evidence and checked-out source are ignored locally and must not be committed.
 
 ## Source updates
 
