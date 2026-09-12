@@ -2,6 +2,8 @@
 
 Audit date: 2026-08-14
 
+Follow-up audit: 2026-08-31
+
 ## Findings
 
 1. The aggregate release-evidence workflow required PostgreSQL but had no
@@ -12,6 +14,16 @@ Audit date: 2026-08-14
    artifact compared the portable schema surface with CockroachDB.
 4. The immutable DPM source pin predated the current signed `main` commit and
    its successful PostgreSQL/CockroachDB source CI.
+5. The first portable scenario primarily bootstrapped new objects. It did not
+   independently certify mutation of existing enums, sequences, generated
+   columns, defaults, not-null state, indexes, views, or routines.
+6. Evidence digests were checked when present, but the comparator did not
+   require a complete artifact set or reject an artifact path escaping its
+   downloaded evidence directory.
+7. The evolution scenario exposed a CockroachDB product defect: DPM retained
+   `order_status` instead of `app.order_status` for a non-public enum column,
+   so `verify` could not materialize its target replica outside that search
+   path. The aggregate pin now includes the focused source regression and fix.
 
 ## Hardening applied
 
@@ -34,9 +46,19 @@ Audit date: 2026-08-14
   any aggregate smoke-test database is dropped or created.
 - Unit-test the evidence verifier's success path and fail-closed behavior for
   artifact tampering, plan-operation drift, and portable catalog drift.
-- Pin DPM to signed commit `027c81892cafc3693b550eaa74940a17b1705235`,
-  whose source CI passed PostgreSQL 16/17, CockroachDB, CLI, package, formal,
-  ownership, and cross-check jobs.
+- Add a second live portable-intersection scenario that evolves already-existing
+  objects: insert an enum label, alter a sequence, change defaults and not-null
+  state, add and backfill ordinary/generated columns, add and enforce a check,
+  replace an index and view, replace functions and a procedure, preserve a
+  trigger dependency, execute the new behavior, and prove replay remains empty.
+- Require every bootstrap and evolution artifact digest, reject malformed
+  digests and evidence-root path escapes, and compare both portable signatures.
+- Normalize only CockroachDB's explicit drop/recreate cycle for a trigger whose
+  function is replaced, while retaining raw per-engine operations and requiring
+  a complete one-to-one dependency cycle.
+- At the original audit, pin DPM to signed commit
+  `027c81892cafc3693b550eaa74940a17b1705235`; later candidate pins remain
+  governed by `pins/source.json` and the repository contract.
 
 ## Deliberate boundaries
 

@@ -172,6 +172,10 @@ FROM (
 ORDER BY signature;
 SQL
 
+# Exercise mutations of already-existing portable objects after the bootstrap
+# contract has captured its own catalog and behavior evidence.
+bash "$root/scripts/run_engine_evolution.sh" "$artifact_dir"
+
 completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 python3 - "$source_commit" "$workflow_commit" "$started_at" "$completed_at" "$DPM_BIN" "$engine_identity" "$engine_kind" "$artifact_dir" <<'PY'
 import hashlib
@@ -199,6 +203,17 @@ required = (
     "post-replay.json",
     "preserved-account-id.txt",
     "procedure-execution.txt",
+    "evolution-catalog-assertions.txt",
+    "evolution-constraint-rejection.txt",
+    "evolution-data-assertions.txt",
+    "evolution-enum-default-insert.txt",
+    "evolution-plan.json",
+    "evolution-plan.sql",
+    "evolution-portable-signature.txt",
+    "evolution-post-apply.json",
+    "evolution-post-replay.json",
+    "evolution-preserved-order-id.txt",
+    "evolution-procedure-execution.txt",
 )
 artifact_digests = {name: digest(artifacts / name) for name in required}
 for name in (

@@ -119,7 +119,7 @@ jobs:
           cargo build --locked --bin dpm 2>&1 | tee ../artifacts/source-build.log
           ./target/debug/dpm version | tee ../artifacts/dpm-version.txt
 
-      - name: Run PostgreSQL migration, replay, and preservation contract
+      - name: Run PostgreSQL bootstrap and object-evolution contracts
         env:
           PGPASSWORD: postgres
           DPM_BIN: source/target/debug/dpm
@@ -331,7 +331,7 @@ jobs:
           cargo build --locked --bin dpm 2>&1 | tee ../artifacts/source-build.log
           ./target/debug/dpm version | tee ../artifacts/dpm-version.txt
 
-      - name: Run CockroachDB migration, replay, and preservation contract
+      - name: Run CockroachDB bootstrap and object-evolution contracts
         env:
           DPM_BIN: source/target/debug/dpm
           DPM_E2E_ADMIN_URL: postgresql://root@127.0.0.1:26257/defaultdb?sslmode=disable
