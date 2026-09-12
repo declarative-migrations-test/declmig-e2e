@@ -31,6 +31,9 @@ jobs:
       - name: Validate repository mode and immutable source pin
         run: python3 scripts/validate_repository_config.py
 
+      - name: Test dual-engine evidence verifier
+        run: python3 -m unittest discover -s tests -v
+
       - name: Export exact source commit
         id: pin
         shell: bash
@@ -116,7 +119,7 @@ jobs:
           cargo build --locked --bin dpm 2>&1 | tee ../artifacts/source-build.log
           ./target/debug/dpm version | tee ../artifacts/dpm-version.txt
 
-      - name: Run diff, verify, apply, and empty post-diff
+      - name: Run PostgreSQL migration, replay, and preservation contract
         env:
           PGPASSWORD: postgres
           DPM_BIN: source/target/debug/dpm
@@ -156,3 +159,256 @@ jobs:
           path: artifacts/
           if-no-files-found: warn
           retention-days: 7
+
+  postgres-lease-invariant:
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      DPM_TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/postgres
+      DPM_E2E_WORKFLOW_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    services:
+      postgres:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_USER: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Check out exact dpm source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: declarative-migrations/declarative-postgres-migrate.rs
+          ref: ${{ needs.contract.outputs.source_commit }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${{ needs.contract.outputs.source_commit }}"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.97.1'
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: source -> target
+          shared-key: declmig-e2e-postgres-lease
+
+      - name: Prove lost lease stops the next statement
+        working-directory: source
+        shell: bash
+        env:
+          CARGO_TERM_COLOR: always
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          cargo test --locked --test lease_contract -- --nocapture \
+            2>&1 | tee ../artifacts/source-lease-contract-tests.log
+
+      - name: Write failure diagnostics
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          {
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "workflow_commit=${DPM_E2E_WORKFLOW_COMMIT}"
+            echo "source_commit=${{ needs.contract.outputs.source_commit }}"
+            rustc --version || true
+            cargo --version || true
+            git -C source rev-parse HEAD || true
+          } > artifacts/lease-failure-diagnostics.txt
+
+      - name: Upload lease-invariant evidence
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: declmig-e2e-postgres-lease-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload lease failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: declmig-e2e-postgres-lease-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+  cockroach-smoke:
+    needs: contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      DPM_E2E_COCKROACH_IMAGE: cockroachdb/cockroach:v25.2.4@sha256:46077f1fdacf2ae8f327994564911484dbb7dfdeea96fd838ec3df0f77418798
+      DPM_E2E_ENGINE: cockroachdb:25.2.4@sha256:46077f1fdacf2ae8f327994564911484dbb7dfdeea96fd838ec3df0f77418798
+      DPM_E2E_WORKFLOW_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out aggregate harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+
+      - name: Check out exact dpm source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: declarative-migrations/declarative-postgres-migrate.rs
+          ref: ${{ needs.contract.outputs.source_commit }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${{ needs.contract.outputs.source_commit }}"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.97.1'
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          workspaces: source -> target
+          shared-key: declmig-e2e-cockroach
+
+      - name: Ensure PostgreSQL wire client is available
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v psql >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq postgresql-client
+          fi
+
+      - name: Start digest-pinned CockroachDB
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --name declmig-cockroach \
+            --publish 26257:26257 \
+            "$DPM_E2E_COCKROACH_IMAGE" \
+            start-single-node --insecure --store=type=mem,size=1GiB
+          for _ in {1..60}; do
+            if docker exec declmig-cockroach cockroach sql \
+              --insecure --host=localhost:26257 --execute='SELECT 1' >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker logs declmig-cockroach
+          exit 1
+
+      - name: Build exact dpm source
+        working-directory: source
+        shell: bash
+        env:
+          CARGO_TERM_COLOR: always
+        run: |
+          set -euo pipefail
+          mkdir -p ../artifacts
+          cargo build --locked --bin dpm 2>&1 | tee ../artifacts/source-build.log
+          ./target/debug/dpm version | tee ../artifacts/dpm-version.txt
+
+      - name: Run CockroachDB migration, replay, and preservation contract
+        env:
+          DPM_BIN: source/target/debug/dpm
+          DPM_E2E_ADMIN_URL: postgresql://root@127.0.0.1:26257/defaultdb?sslmode=disable
+          DPM_E2E_TARGET_URL: postgresql://root@127.0.0.1:26257/declmig_target?sslmode=disable
+        run: bash scripts/run_cockroach_smoke.sh source pins/source.json
+
+      - name: Write failure diagnostics
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          {
+            echo "repository=${GITHUB_REPOSITORY}"
+            echo "workflow_commit=${DPM_E2E_WORKFLOW_COMMIT}"
+            echo "source_commit=${{ needs.contract.outputs.source_commit }}"
+            echo "engine=${DPM_E2E_ENGINE}"
+            rustc --version || true
+            cargo --version || true
+            git -C source rev-parse HEAD || true
+          } > artifacts/failure-diagnostics.txt
+          docker logs declmig-cockroach > artifacts/cockroach.log 2>&1 || true
+
+      - name: Stop CockroachDB
+        if: ${{ always() }}
+        run: docker rm -f declmig-cockroach >/dev/null 2>&1 || true
+
+      - name: Upload immutable evidence bundle
+        if: ${{ success() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: declmig-e2e-cockroach-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload failure diagnostics
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: declmig-e2e-cockroach-failure-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+  dual-engine-parity:
+    needs: [postgres-smoke, postgres-lease-invariant, cockroach-smoke]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out aggregate harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+
+      - name: Download PostgreSQL evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: declmig-e2e-postgres-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/postgres
+
+      - name: Download CockroachDB evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: declmig-e2e-cockroach-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/cockroach
+
+      - name: Verify artifact integrity and portable parity
+        run: >-
+          python3 scripts/compare_engine_evidence.py
+          evidence/postgres evidence/cockroach
+          artifacts/dual-engine-parity.json
+
+      - name: Upload dual-engine evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: declmig-e2e-dual-engine-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/dual-engine-parity.json
+          if-no-files-found: error
+          retention-days: 14
