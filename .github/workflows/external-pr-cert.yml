@@ -1,0 +1,264 @@
+name: External PR certification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: external-pr-cert-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ores-cli:
+    name: ores-cli PR #${{ matrix.pr }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - pr: 40
+            sha: 331537336936e1bef54799c3d94403108ee020e9
+          - pr: 57
+            sha: 36b96c90aef82e299bb30a151147cef0f40387fe
+          - pr: 65
+            sha: 94cf4eff018984a56b6e214a7f3f9178716b7afe
+          - pr: 73
+            sha: 6339c1ca507799d037275679ad88c8e45e94cbac
+          - pr: 86
+            sha: 1042e46e25141e96de4f14938cffa116d90f0eab
+          - pr: 294
+            sha: 5b6b9f854e13295ab1437261e99ebbe169eb9032
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-cli
+          ref: ${{ matrix.sha }}
+          path: source
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source head
+        run: test "$(git -C source rev-parse HEAD)" = "${{ matrix.sha }}"
+
+      - name: Verify shell install contracts
+        working-directory: source
+        run: |
+          set -euo pipefail
+          test -x post-install.sh
+          command -v zsh >/dev/null
+          bash -n post-install.sh
+          for f in tests/post_install.sh tests/shell_install_contract.sh tests/tjsv_lifecycle_contract.sh tests/launcher_symlink_contract.sh; do
+            test -f "$f"
+            bash -n "$f"
+            bash "$f"
+          done
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.95.0
+          components: clippy,rustfmt
+
+      - name: Verify committed dependency graph
+        working-directory: source
+        run: cargo metadata --locked --format-version 1 > /dev/null
+
+      - name: Check formatting
+        working-directory: source
+        run: cargo fmt --all --check
+
+      - name: Run Clippy
+        working-directory: source
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
+
+      - name: Run tests
+        working-directory: source
+        run: cargo test --all-targets --all-features --locked
+
+      - name: Self-audit repository/runtime contracts
+        working-directory: source
+        run: |
+          set -euo pipefail
+          cargo run --quiet --locked --bin oresc -- --no-json audit repo --path . --profile rust-cli > "$RUNNER_TEMP/repository-audit-${{ matrix.pr }}.txt"
+          grep -F 'status=passed command=audit repo' "$RUNNER_TEMP/repository-audit-${{ matrix.pr }}.txt"
+
+      - name: Gate environment contract
+        working-directory: source
+        run: |
+          set -euo pipefail
+          cargo run --quiet --locked --bin oresc -- --no-json audit env --path . > "$RUNNER_TEMP/environment-audit-${{ matrix.pr }}.txt"
+          grep -F 'status=passed command=audit env' "$RUNNER_TEMP/environment-audit-${{ matrix.pr }}.txt"
+
+      - name: Audit package parity
+        working-directory: source
+        run: cargo run --quiet --locked -- audit package --path . > "$RUNNER_TEMP/package-audit-${{ matrix.pr }}.jsonl"
+
+  ores-shared-interface-admission:
+    name: ores-cli PR #40 shared-interface admission
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out exact PR 40 head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-cli
+          ref: 331537336936e1bef54799c3d94403108ee020e9
+          path: source
+          persist-credentials: false
+
+      - name: Verify exact reviewed head
+        run: test "$(git -C source rev-parse HEAD)" = "331537336936e1bef54799c3d94403108ee020e9"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: '22.16.0'
+
+      - name: Resolve immutable shared-interface source
+        id: shared
+        working-directory: source
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const lock = JSON.parse(readFileSync('shared-interfaces/source-lock.json', 'utf8'));
+          assert.equal(lock.schema, 'ores.shared-interfaces-source-lock/v1');
+          assert.equal(lock.repository, 'ORESoftware/ores-interfaces');
+          assert.match(lock.revision, /^[0-9a-f]{40}$/);
+          appendFileSync(process.env.GITHUB_OUTPUT, `revision=${lock.revision}\n`);
+          NODE
+
+      - name: Check out immutable shared-interface package
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-interfaces
+          ref: ${{ steps.shared.outputs.revision }}
+          path: source/.deps/shared-interfaces
+          persist-credentials: false
+
+      - name: Resolve shared package peer pins
+        id: peers
+        working-directory: source
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          const p = JSON.parse(readFileSync('.deps/shared-interfaces/shared-interfaces.json', 'utf8'));
+          assert.equal(p.repository, 'ORESoftware/ores-interfaces');
+          assert.equal(p.authorityModel, 'independent-typespec-and-json-schema-peers');
+          assert.equal(p.authorityTransfer, false);
+          assert.equal(p.source.repository, 'ores-otel/ores-interfaces');
+          assert.equal(p.validator.repository, 'ORESoftware/typespec-json-schema-validator');
+          assert.match(p.source.commit, /^[0-9a-f]{40}$/);
+          assert.match(p.validator.commit, /^[0-9a-f]{40}$/);
+          appendFileSync(process.env.GITHUB_OUTPUT, `source=${p.source.commit}\nvalidator=${p.validator.commit}\n`);
+          NODE
+
+      - name: Check out immutable authored peer source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ores-otel/ores-interfaces
+          ref: ${{ steps.peers.outputs.source }}
+          path: source/.deps/shared-interfaces/.deps/compat
+          persist-credentials: false
+
+      - name: Check out immutable TJSV toolchain
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/typespec-json-schema-validator
+          ref: ${{ steps.peers.outputs.validator }}
+          path: source/.deps/shared-interfaces/.deps/tjsv
+          persist-credentials: false
+
+      - name: Install TJSV lockfile dependencies
+        run: npm ci --prefix source/.deps/shared-interfaces/.deps/tjsv
+
+      - name: Rebuild and admit shared-interface package
+        run: npm --prefix source/.deps/shared-interfaces run check
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.95.0
+
+      - name: Build real oresc consumer
+        working-directory: source
+        run: cargo build --locked --bin oresc
+
+      - name: Admit shared interfaces through oresc and TJSV
+        working-directory: source
+        run: |
+          set -euo pipefail
+          mkdir -p tmp/shared-interfaces
+          validator="$GITHUB_WORKSPACE/source/.deps/shared-interfaces/.deps/tjsv/bin/typespec-json-schema-validator.mjs"
+          test -x "$validator"
+          target/debug/oresc --no-json audit contract \
+            --typespec .deps/shared-interfaces/generated/public/main.tsp \
+            --schema .deps/shared-interfaces/generated/public/schema.json \
+            --validator "$validator" \
+            --report tmp/shared-interfaces/report.json \
+            | tee tmp/shared-interfaces/oresc.txt
+          grep -F 'status=passed command=audit contract' tmp/shared-interfaces/oresc.txt
+
+      - name: Cross-check package and receipts
+        working-directory: source
+        run: node scripts/verify-shared-interfaces.mjs
+
+  tkda-orm-core:
+    name: tkda-orm-core PR #2 Postgres
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: takoda_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d takoda_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/takoda_test
+    steps:
+      - name: Check out exact PR 2 head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: takoda-automation/tkda-orm-core
+          ref: 5b5d5926bde58bcea4512042835e3f55dad99aeb
+          path: source
+          persist-credentials: false
+
+      - name: Verify exact reviewed head
+        run: test "$(git -C source rev-parse HEAD)" = "5b5d5926bde58bcea4512042835e3f55dad99aeb"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.95.0
+          components: rustfmt,clippy
+
+      - name: Check formatting
+        working-directory: source
+        run: cargo fmt --check
+
+      - name: Cargo check
+        working-directory: source
+        run: cargo check --all-features --all-targets
+
+      - name: Clippy
+        working-directory: source
+        run: cargo clippy --all-features --all-targets -- -D warnings -A clippy::needless_return
+
+      - name: Postgres-backed tests
+        working-directory: source
+        run: cargo test --all-features
