@@ -1,0 +1,17 @@
+name: quota-admission-contract
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: quota-admission-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  conformance:
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify quota and admission invariants
+        run: python3 tests/quota_admission_contract.py
