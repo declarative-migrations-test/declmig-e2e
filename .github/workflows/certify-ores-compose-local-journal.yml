@@ -1,0 +1,43 @@
+name: certify-ores-compose-local-journal
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-head:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      COMPOSE_SHA: 22fc53074e3db01347da0e639201470d7b28eea1
+    steps:
+      - name: Check out test harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check out exact ores-compose head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ORESoftware/ores-compose
+          ref: ${{ env.COMPOSE_SHA }}
+          path: ores-compose
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Assert exact ores-compose revision
+        working-directory: ores-compose
+        run: test "$(git rev-parse HEAD)" = "$COMPOSE_SHA"
+      - name: Install reviewed Rust components
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt,clippy
+          rustup default 1.98.1
+      - name: Format
+        working-directory: ores-compose
+        run: cargo fmt --all --check
+      - name: Clippy
+        working-directory: ores-compose
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+      - name: Tests
+        working-directory: ores-compose
+        run: cargo test --locked --all-targets --all-features
