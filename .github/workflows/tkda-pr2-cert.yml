@@ -1,0 +1,76 @@
+name: tkda-orm-core PR 2 exact-source certification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  postgres-cert:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: takoda_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d takoda_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/takoda_test
+      SOURCE_HEAD: 5b5d5926bde58bcea4512042835e3f55dad99aeb
+      SOURCE_ROOT: snapshots/tkda-orm-core/pr-2
+    steps:
+      - name: Check out funded carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Verify exact production Git blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$SOURCE_ROOT"
+          test "$(git hash-object "$root/.github/workflows/ci.yml")" = "44d3fb6cfdafdd39d60ce6721efb440452f41245"
+          test "$(git hash-object "$root/.zpkg.toml")" = "b58d3d1407800abd72c965fbbd4c476c4c38d9d1"
+          test "$(git hash-object "$root/ARCHITECTURE.md")" = "b6ec216b522cc12ce1189cee724a79671e8db0ce"
+          test "$(git hash-object "$root/Cargo.toml")" = "31029ce770c3dd6d5ecadeb8b61618a059e241b9"
+          test "$(git hash-object "$root/README.md")" = "be72331c90fb57c719453463f405c152785b0fb6"
+          test "$(git hash-object "$root/TAKODA_ROLE.md")" = "223542ffdb1a915869a81de753dc3129428877c1"
+          test "$(git hash-object "$root/migrations/0001_run_fencing.sql")" = "ba561387badcb9eb9343adcb293146eabe9f25dc"
+          test "$(git hash-object "$root/migrations/0002_checkpoint_epoch_sequences.sql")" = "ddd44d1420f6e27580760c2391cc15a3c67443d6"
+          test "$(git hash-object "$root/src/diesel_schema.rs")" = "807b227bf07dc5661d26926c30cd2a8b1aad1c9e"
+          test "$(git hash-object "$root/src/lib.rs")" = "733ff44f0996f6cd4fb5e4661fcbee4e012050d1"
+          test "$(git hash-object "$root/tests/postgres_fencing.rs")" = "197a701d61bcc77446f652b7a6e84b194525d418"
+          test "$(git hash-object "$root/tests/postgres_fencing_race.rs")" = "1d0de0d7b6f12e4cbecb0807004218c239928f83"
+          printf '%s\n' "source_head=$SOURCE_HEAD"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          components: rustfmt,clippy
+
+      - name: Check formatting
+        working-directory: snapshots/tkda-orm-core/pr-2
+        run: cargo fmt --check
+
+      - name: Check all features and targets
+        working-directory: snapshots/tkda-orm-core/pr-2
+        run: cargo check --all-features --all-targets
+
+      - name: Clippy all features and targets
+        working-directory: snapshots/tkda-orm-core/pr-2
+        run: cargo clippy --all-features --all-targets -- -D warnings -A clippy::needless_return
+
+      - name: Run Postgres-backed tests
+        working-directory: snapshots/tkda-orm-core/pr-2
+        run: cargo test --all-features
