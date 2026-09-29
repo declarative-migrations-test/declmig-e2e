@@ -1,0 +1,144 @@
+name: Desktop fleet external certification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-fleet-cert-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  COMMON_REPOSITORY: ORESoftware/ores-common-desktop-infra
+  COMMON_SHA: 17be7f8690d235d640418cfc84b4d11862a40bb2
+
+jobs:
+  common-rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${FLEET_GITHUB_READ_TOKEN:-}"
+
+      - name: Check out exact common desktop head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ env.COMMON_REPOSITORY }}
+          ref: ${{ env.COMMON_SHA }}
+          path: source
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact common desktop head
+        shell: bash
+        run: test "$(git -C source rev-parse HEAD)" = "$COMMON_SHA"
+
+      - name: Install declared Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.82"
+          components: rustfmt,clippy
+
+      - name: Check Rust formatting
+        working-directory: source
+        run: cargo +1.82 fmt --all -- --check
+
+      - name: Lint Rust workspace
+        working-directory: source
+        run: cargo +1.82 clippy --workspace --all-targets --locked -- -D warnings -A clippy::needless_return
+
+      - name: Test Rust workspace
+        working-directory: source
+        run: cargo +1.82 test --workspace --all-targets --locked
+
+      - name: Run shared desktop conformance suite
+        working-directory: source
+        run: cargo +1.82 test --locked -p ores-common-desktop-conformance
+
+  consumer-infra:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - product: indiebuild
+            repository: gha-indie-worker/giw-desktop-infra
+            sha: c96c269691e46b91497b2ba1cd983392a6a6d926
+          - product: takoda
+            repository: takoda-automation/tkda-desktop-infra
+            sha: 188233f51e15468c05b12b214450e685ce196b8c
+          - product: scintilla
+            repository: scintilla-run/scintilla-desktop-infra
+            sha: 2495623cb3aab741117b0c2b88d7427918630bc1
+          - product: beamscale
+            repository: beamscale/beamscale-desktop-infra
+            sha: 2910bf03d9aa82f86ddec403675fa4d1dc10dcb5
+          - product: lunatic-lorry
+            repository: lunatic-lorry/ll-desktop-infra
+            sha: cbe8501da807df142554facaa8d54383e36024ad
+          - product: wasm-xprs
+            repository: wasm-xprs/wasmx-desktop-infra
+            sha: 63aed3d57fbdf725865f72cdb4c4d53636acd0a4
+          - product: pony-expres
+            repository: pony-expres/poex-desktop-infra
+            sha: 7b7e759d356b18694d438f170dcedc467f86782d
+          - product: graal-show
+            repository: graal-show/gs-desktop-infra
+            sha: 3f2de0ceb088aed37468434f320382e7e753d111
+    steps:
+      - name: Check out exact product infra head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.sha }}
+          path: consumer
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact product infra head
+        shell: bash
+        run: test "$(git -C consumer rev-parse HEAD)" = "${{ matrix.sha }}"
+
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${FLEET_GITHUB_READ_TOKEN:-}"
+
+      - name: Check out exact common desktop head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ${{ env.COMMON_REPOSITORY }}
+          ref: ${{ env.COMMON_SHA }}
+          path: consumer/tmp/dev/ores-common-desktop-infra
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact common desktop dependency
+        shell: bash
+        run: test "$(git -C consumer/tmp/dev/ores-common-desktop-infra rev-parse HEAD)" = "$COMMON_SHA"
+
+      - name: Install declared Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.82"
+
+      - name: Validate product compose and appliance contract
+        working-directory: consumer
+        env:
+          ORES_COMMON_DESKTOP_EXPECTED_REVISION: ${{ env.COMMON_SHA }}
+        run: |
+          cargo +1.82 run --locked             --manifest-path tmp/dev/ores-common-desktop-infra/daemon/rust/Cargo.toml             --bin ores-common-desktop-consumer-check
