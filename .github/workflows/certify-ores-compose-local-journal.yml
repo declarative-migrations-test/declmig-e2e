@@ -11,7 +11,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      COMPOSE_SHA: b1b8041ad8ba5de993763dc586400ca12b5225c5
+      COMPOSE_SHA: 6ece801cdb90464c7147b8c7523fb9c9b70c9773
     steps:
       - name: Check out test harness
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
