@@ -23,3 +23,6 @@ temp/worktrees
 
 # machine-local symlink to ORESoftware/my-ai AGENTS.md; never committed
 .ores/
+
+# Never vendor private upstream source into this public certification carrier
+snapshots/
