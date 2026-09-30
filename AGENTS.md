@@ -7,6 +7,13 @@
 - Keep `tmp`, `temp`, `tmp/worktrees`, and `temp/worktrees` ignored in the repository-root `.gitignore`. Do not commit files from those directories.
 - Relocate or remove a worktree only when the operator explicitly requests it. Before removal, preserve and publish intended changes, verify its commit is represented on the target branch, and confirm there are no tracked, untracked, ignored-sensitive, or in-use files that must survive. Remove it with `git worktree remove <path>` without `--force`; never delete a worktree directory with `rm`.
 
+## Public carrier source boundary
+
+- This repository is public. Never copy, vendor, mirror, snapshot, or commit source code from a private repository here, even temporarily for CI.
+- Certify private repositories only through the manual exact-head certification workflows with a least-privilege read credential and immutable commit SHA.
+- Do not add tracked `snapshots/` trees. Under `fixtures/`, keep database/data fixtures only; do not vendor application source files such as Rust, Go, JavaScript/TypeScript, Python, Dart, Java, Kotlin, Swift, C/C++, Erlang, Gleam, Zig, or Pony source.
+- Before merging certification scaffolding, verify the upstream repository visibility. If it is private, source bytes must never be copied into this public carrier.
+
 <!-- BEGIN ores-agents-pointer: managed by ORESoftware/my-ai; edit there, not here -->
 
 ## Canonical agent instructions
