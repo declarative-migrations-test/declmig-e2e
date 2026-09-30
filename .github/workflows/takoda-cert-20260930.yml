@@ -1,0 +1,254 @@
+name: Takoda exact-head certification 2026-09-30
+
+on:
+  push:
+    branches:
+      - audit/takoda-cert-20260930
+
+permissions:
+  contents: read
+
+concurrency:
+  group: takoda-cert-20260930
+  cancel-in-progress: true
+
+jobs:
+  rust-root:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: api-durable-routing
+            repository: takoda-automation/tkda-api-server.rs
+            sha: e4437a712fd243becf6a869f69ebb02434447de4
+            locked: "true"
+          - label: main-consolidated
+            repository: takoda-automation/tkda-main-server.rs
+            sha: 15cb585cc761cb936ccc675bfefc8901552a0a3f
+            locked: "true"
+          - label: main-fenced
+            repository: takoda-automation/tkda-main-server.rs
+            sha: df1816031cbeefc7572733d978555a98136b287d
+            locked: "true"
+          - label: daemon-app-control
+            repository: takoda-automation/tkda-desktop-daemon
+            sha: faba9d5290ad3aa73bffa6ee38fbd6b9b58f338e
+            locked: "false"
+          - label: daemon-scintilla
+            repository: takoda-automation/tkda-desktop-daemon
+            sha: 195bd13587106a900a4b18b45e28a79f0cce49c7
+            locked: "false"
+          - label: sync-source-integrity
+            repository: takoda-automation/tkda-sync
+            sha: f62bd2dc58287890f961e2f80b49d87da58b56f5
+            locked: "false"
+          - label: public-mcp
+            repository: takoda-automation/tkda-mcp-server.rs
+            sha: 4c42c9766271c0f2896b4e9a07c411a3f006b3fc
+            locked: "false"
+          - label: product-cli
+            repository: takoda-automation/tkda-cli
+            sha: 26c34b57933e7e968ca51e8cf85bb4d2fec00c39
+            locked: "false"
+          - label: rust-desktop-app
+            repository: takoda-automation/tkda-desktop-app.rs
+            sha: 9d6eaae784730fe60b63f3ba7de13c04e7d6ad30
+            locked: "false"
+    name: rust-root / ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${FLEET_GITHUB_READ_TOKEN:-}" || exit 78
+
+      - name: Check out exact private source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.sha }}
+          path: source
+          fetch-depth: 1
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source
+        shell: bash
+        run: test "$(git -C source rev-parse HEAD)" = "${{ matrix.sha }}"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.88.0"
+          components: rustfmt,clippy
+
+      - name: Formatting
+        working-directory: source
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        working-directory: source
+        shell: bash
+        env:
+          LOCKED: ${{ matrix.locked }}
+        run: |
+          set -euo pipefail
+          if [ "$LOCKED" = true ]; then
+            cargo check --locked --all-targets
+          else
+            cargo check --all-targets
+          fi
+
+      - name: Clippy
+        working-directory: source
+        shell: bash
+        env:
+          LOCKED: ${{ matrix.locked }}
+        run: |
+          set -euo pipefail
+          if [ "$LOCKED" = true ]; then
+            cargo clippy --locked --all-targets -- -D warnings
+          else
+            cargo clippy --all-targets -- -D warnings
+          fi
+
+      - name: Tests
+        working-directory: source
+        shell: bash
+        env:
+          LOCKED: ${{ matrix.locked }}
+        run: |
+          set -euo pipefail
+          if [ "$LOCKED" = true ]; then
+            cargo test --locked --all-targets
+          else
+            cargo test --all-targets
+          fi
+
+      - name: Verify source remained clean
+        working-directory: source
+        run: |
+          git diff --exit-code
+          git diff --cached --exit-code
+
+  rust-subcrate:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: desktop-infra
+            repository: takoda-automation/tkda-desktop-infra
+            sha: cb868eef410fb8ace92d48aa5c1e4f772ad89997
+            manifest: tools/tkda-desktop-tool/Cargo.toml
+          - label: monorepo
+            repository: takoda-automation/tkda-monorepo
+            sha: 5f0dca4d85b8b1139ff3dea8cdbb4052b554f624
+            manifest: tools/tkda-monorepo-tool/Cargo.toml
+    name: rust-subcrate / ${{ matrix.label }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${FLEET_GITHUB_READ_TOKEN:-}" || exit 78
+
+      - name: Check out exact private source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.sha }}
+          path: source
+          fetch-depth: 1
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source
+        run: test "$(git -C source rev-parse HEAD)" = "${{ matrix.sha }}"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.88.0"
+          components: rustfmt,clippy
+
+      - name: Formatting
+        run: cargo fmt --manifest-path "source/${{ matrix.manifest }}" --all -- --check
+
+      - name: Check
+        run: cargo check --manifest-path "source/${{ matrix.manifest }}" --all-targets
+
+      - name: Clippy
+        run: cargo clippy --manifest-path "source/${{ matrix.manifest }}" --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --manifest-path "source/${{ matrix.manifest }}" --all-targets
+
+      - name: Verify source remained clean
+        working-directory: source
+        run: |
+          git diff --exit-code
+          git diff --cached --exit-code
+
+  browser-workers:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${FLEET_GITHUB_READ_TOKEN:-}" || exit 78
+
+      - name: Check out exact browser-worker candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: takoda-automation/tkda-browser-workers.ts
+          ref: 750206c0db9aa708325bba7b0cb4c9a68c69f777
+          path: source
+          fetch-depth: 1
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source
+        run: test "$(git -C source rev-parse HEAD)" = "750206c0db9aa708325bba7b0cb4c9a68c69f777"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 22
+          package-manager-cache: false
+
+      - name: Install locked dependencies
+        working-directory: source
+        run: npm ci --ignore-scripts
+
+      - name: Typecheck
+        working-directory: source
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: source
+        run: npm run build
+
+      - name: Unit tests
+        working-directory: source
+        run: npm test
+
+      - name: Verify source remained clean
+        working-directory: source
+        run: |
+          git diff --exit-code
+          git diff --cached --exit-code
