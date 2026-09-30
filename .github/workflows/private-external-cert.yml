@@ -1,0 +1,149 @@
+name: Private external exact-head certification
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: Approved private repository in owner/name form
+        required: true
+        type: string
+      sha:
+        description: Full lowercase 40-character commit SHA to certify
+        required: true
+        type: string
+      profile:
+        description: Rust validation profile
+        required: true
+        default: rust-basic
+        type: choice
+        options:
+          - rust-basic
+          - rust-locked
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-external-cert-${{ inputs.repository }}-${{ inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  validate-target:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      repository: ${{ steps.target.outputs.repository }}
+      sha: ${{ steps.target.outputs.sha }}
+    steps:
+      - name: Check out certification harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          show-progress: false
+
+      - name: Validate allowlisted exact target
+        id: target
+        shell: bash
+        env:
+          TARGET_REPOSITORY: ${{ inputs.repository }}
+          TARGET_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          while IFS= read -r line; do
+            printf '%s\n' "$line" >> "$GITHUB_OUTPUT"
+          done < <(bash scripts/validate-private-cert-target.sh "$TARGET_REPOSITORY" "$TARGET_SHA")
+
+  certify-rust:
+    needs: validate-target
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_TERM_COLOR: always
+    steps:
+      - name: Require fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FLEET_GITHUB_READ_TOKEN:-}" ]; then
+            echo "::error::FLEET_GITHUB_READ_TOKEN is not configured in this repository"
+            exit 78
+          fi
+
+      - name: Check out exact private source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.validate-target.outputs.repository }}
+          ref: ${{ needs.validate-target.outputs.sha }}
+          path: source
+          fetch-depth: 1
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source checkout
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ needs.validate-target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "$EXPECTED_SHA"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.97.1'
+          components: rustfmt,clippy
+
+      - name: Verify Cargo project
+        shell: bash
+        working-directory: source
+        run: |
+          set -euo pipefail
+          test -f Cargo.toml
+          cargo metadata --format-version 1 > /dev/null
+
+      - name: Check formatting
+        working-directory: source
+        run: cargo fmt --all -- --check
+
+      - name: Cargo check
+        if: inputs.profile == 'rust-basic'
+        working-directory: source
+        run: cargo check --all-targets --all-features
+
+      - name: Cargo check locked
+        if: inputs.profile == 'rust-locked'
+        working-directory: source
+        run: cargo check --locked --all-targets --all-features
+
+      - name: Clippy
+        if: inputs.profile == 'rust-basic'
+        working-directory: source
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Clippy locked
+        if: inputs.profile == 'rust-locked'
+        working-directory: source
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Test
+        if: inputs.profile == 'rust-basic'
+        working-directory: source
+        run: cargo test --all-targets --all-features
+
+      - name: Test locked
+        if: inputs.profile == 'rust-locked'
+        working-directory: source
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Verify source remained clean
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"

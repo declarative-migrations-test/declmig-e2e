@@ -1,0 +1,80 @@
+name: private-cert-contract
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: private-cert-contract-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.EXPECTED_HEAD }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact contributor head
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+
+      - name: Exercise private-cert target validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          good_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+          bash scripts/validate-private-cert-target.sh takoda-automation/tkda-main-server.rs "$good_sha"
+          bash scripts/validate-private-cert-target.sh ORESoftware/ores-cli "$good_sha"
+          bash scripts/validate-private-cert-target.sh beamscale/beamscale-desktop-daemon "$good_sha"
+
+          if bash scripts/validate-private-cert-target.sh evil-org/repo "$good_sha"; then
+            echo "unexpectedly admitted unapproved owner" >&2
+            exit 1
+          fi
+
+          if bash scripts/validate-private-cert-target.sh 'takoda-automation/repo;echo-pwned' "$good_sha"; then
+            echo "unexpectedly admitted unsafe repository syntax" >&2
+            exit 1
+          fi
+
+          if bash scripts/validate-private-cert-target.sh takoda-automation/tkda-main-server.rs main; then
+            echo "unexpectedly admitted mutable ref" >&2
+            exit 1
+          fi
+
+          if bash scripts/validate-private-cert-target.sh takoda-automation/tkda-main-server.rs AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA; then
+            echo "unexpectedly admitted uppercase sha" >&2
+            exit 1
+          fi
+
+      - name: Enforce secret boundary contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          workflow=.github/workflows/private-external-cert.yml
+          test -f "$workflow"
+          grep -F 'workflow_dispatch:' "$workflow"
+          if grep -Fq 'pull_request:' "$workflow"; then
+            echo "private certification workflow must never run on pull_request" >&2
+            exit 1
+          fi
+          grep -F 'FLEET_GITHUB_READ_TOKEN' "$workflow"
+          grep -F 'persist-credentials: false' "$workflow"
+          grep -F 'Verify exact source checkout' "$workflow"
+          grep -F 'timeout-minutes:' "$workflow"
+
+      - name: Verify clean tracked state
+        shell: bash
+        run: git diff --exit-code
