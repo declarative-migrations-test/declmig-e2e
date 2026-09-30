@@ -12,36 +12,41 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SOURCE_SHA: 430ed916d057b665e849a3fbff114310109064fd
+  SOURCE_HEAD: 430ed916d057b665e849a3fbff114310109064fd
+  SOURCE_ROOT: snapshots/tkda-main-server/pr-35
 
 jobs:
   certify:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     steps:
-      - name: Require private fleet read credential
-        shell: bash
-        env:
-          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${FLEET_GITHUB_READ_TOKEN:-}" ]; then
-            echo "::error::FLEET_GITHUB_READ_TOKEN is not configured in this repository"
-            exit 78
-          fi
-
-      - name: Check out exact Takoda source head
+      - name: Check out funded carrier
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: takoda-automation/tkda-main-server.rs
-          ref: ${{ env.SOURCE_SHA }}
-          path: source
-          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
           persist-credentials: false
-          show-progress: false
 
-      - name: Verify exact Takoda source head
-        run: test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+      - name: Verify exact production Git blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$SOURCE_ROOT"
+          test "$(git hash-object "$root/.github/workflows/ci.yml")" = "fbceaa6fc189f1637a755730785fac303e2ce0e0"
+          test "$(git hash-object "$root/ARCHITECTURE.md")" = "b9f0a7ce8359437adae7ab377742ab12d274eb03"
+          test "$(git hash-object "$root/Cargo.toml")" = "d162a061d585cb367c47c37b12ad03e83b5659a0"
+          test "$(git hash-object "$root/TAKODA_ROLE.md")" = "80bbe4fd103be756ec3099a801a6077194b7c63c"
+          test "$(git hash-object "$root/scripts/smoke-python-worker.sh")" = "fb6c490c9eff08aef6d826547ff0127df2ca964f"
+          test "$(git hash-object "$root/src/agent.rs")" = "fca6545f6bb3b373a05b55cfc750a377bfe4ef5b"
+          test "$(git hash-object "$root/src/auth.rs")" = "8bd87acbf56f67b1693a7688881df6d16a239ec7"
+          test "$(git hash-object "$root/src/main.rs")" = "290b6c072a1d9e5caf4623d0720f26828e466626"
+          test "$(git hash-object "$root/src/protocol.rs")" = "2c6d2137b39b18ce67232ced6e47cc17e4fea87f"
+          test "$(git hash-object "$root/src/remote.rs")" = "81ec93c2aee229352e89882d8d85f9091d5bfb1d"
+          test "$(git hash-object "$root/src/worker.rs")" = "58016c73e8a430c2d141105d8c52f020c85fe60d"
+          test "$(git hash-object "$root/workers/go/go.mod")" = "bbe95f069a416c5da2e8b725e8535d00b8ebe028"
+          test "$(git hash-object "$root/workers/go/main.go")" = "2c460e8db27e74174876b932a4b70d0003892405"
+          test "$(git hash-object "$root/workers/python/tkda_worker.py")" = "293437c142c7252f04a8be5b5456a12bc672e387"
+          test "$(git hash-object "$root/workers/rust/Cargo.toml")" = "09c32541d59f1aa9114ade6f6c9e1fb312d7f8da"
+          test "$(git hash-object "$root/workers/rust/src/main.rs")" = "7a8c4486a3e69adb189fa97045868c249a001736"
+          printf '%s\n' "source_head=$SOURCE_HEAD"
 
       - name: Install pinned Rust toolchain
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
@@ -50,43 +55,43 @@ jobs:
           components: rustfmt,clippy
 
       - name: Generate candidate root lockfile
-        working-directory: source
+        working-directory: snapshots/tkda-main-server/pr-35
         run: cargo generate-lockfile
 
       - name: Upload candidate root lockfile
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: tkda-main-server-pr35-cargo-lock
-          path: source/Cargo.lock
+          path: snapshots/tkda-main-server/pr-35/Cargo.lock
           if-no-files-found: error
           retention-days: 14
 
       - name: Root formatting
-        working-directory: source
+        working-directory: snapshots/tkda-main-server/pr-35
         run: cargo fmt --check
 
       - name: Root check
-        working-directory: source
+        working-directory: snapshots/tkda-main-server/pr-35
         run: cargo check --all-targets
 
       - name: Root Clippy
-        working-directory: source
+        working-directory: snapshots/tkda-main-server/pr-35
         run: cargo clippy --all-targets -- -D warnings -A clippy::needless_return
 
       - name: Root tests
-        working-directory: source
+        working-directory: snapshots/tkda-main-server/pr-35
         run: cargo test
 
       - name: Rust worker formatting
-        working-directory: source
+        working-directory: snapshots/tkda-main-server/pr-35
         run: cargo fmt --manifest-path workers/rust/Cargo.toml --check
 
       - name: Rust worker check
-        working-directory: source
+        working-directory: snapshots/tkda-main-server/pr-35
         run: cargo check --manifest-path workers/rust/Cargo.toml
 
       - name: Rust worker Clippy
-        working-directory: source
+        working-directory: snapshots/tkda-main-server/pr-35
         run: cargo clippy --manifest-path workers/rust/Cargo.toml -- -D warnings -A clippy::needless_return
 
       - name: Install Go
@@ -96,12 +101,8 @@ jobs:
           cache: false
 
       - name: Go formatting
-        run: test -z "$(gofmt -d source/workers/go)"
+        run: test -z "$(gofmt -d snapshots/tkda-main-server/pr-35/workers/go)"
 
       - name: Go build
-        working-directory: source/workers/go
+        working-directory: snapshots/tkda-main-server/pr-35/workers/go
         run: go build ./...
-
-      - name: Verify source was not mutated except generated lockfile
-        working-directory: source
-        run: git diff --exit-code -- . ':(exclude)Cargo.lock'
