@@ -11,7 +11,7 @@
 
 - This repository is public. Never copy, vendor, mirror, snapshot, or commit source code from a private repository here, even temporarily for CI.
 - Certify private repositories only through the manual exact-head certification workflows with a least-privilege read credential and immutable commit SHA.
-- Do not add tracked `snapshots/` trees. Under `fixtures/`, keep database/data fixtures only; do not vendor application source files such as Rust, Go, JavaScript/TypeScript, Python, Dart, Java, Kotlin, Swift, C/C++, Erlang, Gleam, Zig, or Pony source.
+- Do not add tracked `snapshots/` trees. Under `fixtures/`, keep database/data fixtures only; do not vendor application source files such as Rust, Go, JavaScript/TypeScript, Python, Dart, Java, Kotlin, Swift, C/C++, Erlang, Gleam, Zig, or Pony source. Keep `cert/` metadata-only: certification receipts may be JSON/YAML/Markdown/text/hash/signature evidence, but never copied application source, tests, package manifests, or buildable workspaces.
 - Before merging certification scaffolding, verify the upstream repository visibility. If it is private, source bytes must never be copied into this public carrier.
 
 <!-- BEGIN ores-agents-pointer: managed by ORESoftware/my-ai; edit there, not here -->
