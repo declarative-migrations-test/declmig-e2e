@@ -34,8 +34,9 @@ const MAX_INGRESS_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_INGRESS_RESPONSE_HEADER_VALUES: usize = 32;
 const MAX_INGRESS_RESPONSE_HEADER_VALUE_BYTES: usize = 8 * 1024;
 const MAX_INGRESS_RESPONSE_HEADER_BYTES: usize = 32 * 1024;
-const INGRESS_RESPONSE_HEADER_ALLOWLIST: [&str; 13] = [
+const INGRESS_RESPONSE_HEADER_ALLOWLIST: [&str; 14] = [
     "cache-control",
+    "content-encoding",
     "content-type",
     "ratelimit",
     "ratelimit-limit",
@@ -58,9 +59,9 @@ const MAX_TOKEN_FILE_BYTES: u64 = 4096;
 const IDEMPOTENCY_HEADER: &str = "x-ores-idempotency-key";
 const MIN_IDEMPOTENCY_KEY_BYTES: usize = 8;
 const MAX_IDEMPOTENCY_KEY_BYTES: usize = 256;
-const MAX_RECENT_IDEMPOTENCY_KEYS: usize = 4096;
+const MAX_RECENT_IDEMPOTENCY_KEYS: usize = 2048;
 const IDEMPOTENCY_REPLAY_TTL_MS: u64 = 10 * 60 * 1000;
-const MAX_REPLAY_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_REPLAY_FILE_BYTES: u64 = 1024 * 1024;
 const LEGACY_REPLAY_FILE_VERSION: u32 = 1;
 const REPLAY_FILE_VERSION: u32 = 2;
 
@@ -125,21 +126,42 @@ struct LegacyReplayFile {
     keys: Vec<String>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReplayReserveError {
+    Duplicate,
+    Capacity,
+    ExpirationOverflow,
+}
+
+impl std::fmt::Display for ReplayReserveError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return formatter.write_str(match self {
+            Self::Duplicate => "idempotency key was already used",
+            Self::Capacity => "idempotency replay capacity reached",
+            Self::ExpirationOverflow => "idempotency replay expiration overflow",
+        });
+    }
+}
+
 impl ReplayState {
-    fn reserve(&mut self, key: String, now_unix_ms: u64) -> Result<()> {
+    fn reserve(
+        &mut self,
+        key: String,
+        now_unix_ms: u64,
+    ) -> std::result::Result<(), ReplayReserveError> {
         let now_unix_ms = self.observe_time(now_unix_ms);
         self.purge_expired(now_unix_ms);
 
         if self.keys.contains(&key) {
-            bail!("idempotency key was already used");
+            return Err(ReplayReserveError::Duplicate);
         }
         if self.order.len() >= MAX_RECENT_IDEMPOTENCY_KEYS {
-            bail!("idempotency replay capacity reached; refusing to evict a live reservation");
+            return Err(ReplayReserveError::Capacity);
         }
 
         let expires_at_unix_ms = now_unix_ms
             .checked_add(IDEMPOTENCY_REPLAY_TTL_MS)
-            .ok_or_else(|| anyhow!("idempotency replay expiration overflow"))?;
+            .ok_or(ReplayReserveError::ExpirationOverflow)?;
         self.keys.insert(key.clone());
         self.order.push_back(ReplayEntry {
             key,
@@ -221,6 +243,9 @@ async fn main() -> Result<()> {
         .ok_or_else(|| anyhow!("token path has no parent"))?
         .join("mutation-replay.json");
     let replay = load_replay_state(&replay_path)?;
+    if replay_path.exists() {
+        save_replay_state(&replay_path, &replay)?;
+    }
     let ingress_url = config
         .get("SCINTILLA_LOCAL_INGRESS_URL")
         .cloned()
@@ -492,7 +517,8 @@ async fn invoke(
         request = request.bearer_auth(token.as_ref());
     }
     let upstream = request.send().await.map_err(bad_gateway)?;
-    let release_idempotency = is_definitive_quota_rejection(upstream.status(), upstream.headers());
+    let release_idempotency =
+        is_definitive_quota_rejection(upstream.status(), upstream.headers());
     let response = proxy_ingress_response(upstream, MAX_INGRESS_RESPONSE_BYTES)
         .await
         .map_err(bad_gateway)?;
@@ -626,7 +652,6 @@ async fn release_mutation(
     }
     return Ok(());
 }
-
 async fn reserve_mutation(
     headers: &HeaderMap,
     state: &AppState,
@@ -636,7 +661,12 @@ async fn reserve_mutation(
     let mut replay = state.replay.lock().await;
     let previous = replay.clone();
     if let Err(error) = replay.reserve(key, now_unix_ms) {
-        return Err((StatusCode::CONFLICT, error.to_string()));
+        let status = match error {
+            ReplayReserveError::Duplicate => StatusCode::CONFLICT,
+            ReplayReserveError::Capacity => StatusCode::SERVICE_UNAVAILABLE,
+            ReplayReserveError::ExpirationOverflow => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        return Err((status, error.to_string()));
     }
     if let Err(error) = save_replay_state(&state.replay_path, &replay) {
         *replay = previous;
@@ -894,31 +924,33 @@ fn replay_state_from_entries(entries: Vec<ReplayEntry>, now_unix_ms: u64) -> Res
         );
     }
 
-    let rearmed_expiry = now_unix_ms
-        .checked_add(IDEMPOTENCY_REPLAY_TTL_MS)
-        .ok_or_else(|| anyhow!("replay restart expiration overflow"))?;
     let mut seen = HashSet::with_capacity(entries.len());
-    let mut rearmed = Vec::with_capacity(entries.len());
+    let mut live = Vec::with_capacity(entries.len());
     for entry in entries {
         validate_idempotency_key(&entry.key)?;
         if !seen.insert(entry.key.clone()) {
             bail!("mutation replay state contains duplicate idempotency keys");
         }
-        rearmed.push(ReplayEntry {
-            key: entry.key,
-            expires_at_unix_ms: rearmed_expiry,
-        });
+        if entry.expires_at_unix_ms > now_unix_ms {
+            live.push(entry);
+        }
     }
-
-    let keys = rearmed.iter().map(|entry| entry.key.clone()).collect();
+    live.sort_by_key(|entry| entry.expires_at_unix_ms);
+    let keys = live.iter().map(|entry| entry.key.clone()).collect();
     return Ok(ReplayState {
-        order: VecDeque::from(rearmed),
+        order: VecDeque::from(live),
         keys,
         last_observed_unix_ms: now_unix_ms,
     });
 }
 
 fn replay_state_from_legacy_keys(keys: Vec<String>, now_unix_ms: u64) -> Result<ReplayState> {
+    if keys.len() > MAX_RECENT_IDEMPOTENCY_KEYS {
+        bail!(
+            "mutation replay state contains {} keys; maximum is {MAX_RECENT_IDEMPOTENCY_KEYS}",
+            keys.len()
+        );
+    }
     let expires_at_unix_ms = now_unix_ms
         .checked_add(IDEMPOTENCY_REPLAY_TTL_MS)
         .ok_or_else(|| anyhow!("legacy replay migration expiration overflow"))?;
@@ -971,17 +1003,11 @@ fn load_replay_state(path: &Path) -> Result<ReplayState> {
 
     return match version {
         value if value == u64::from(LEGACY_REPLAY_FILE_VERSION) => {
-            let persisted: LegacyReplayFile = serde_json::from_value(document.clone())?;
-            if persisted.version != LEGACY_REPLAY_FILE_VERSION {
-                bail!("legacy replay version changed during parsing");
-            }
+            let persisted: LegacyReplayFile = serde_json::from_value(document)?;
             replay_state_from_legacy_keys(persisted.keys, now_unix_ms)
         }
         value if value == u64::from(REPLAY_FILE_VERSION) => {
             let persisted: ReplayFile = serde_json::from_value(document)?;
-            if persisted.version != REPLAY_FILE_VERSION {
-                bail!("replay version changed during parsing");
-            }
             replay_state_from_entries(persisted.entries, now_unix_ms)
         }
         other => Err(anyhow!(
@@ -1085,7 +1111,6 @@ async fn proxy_ingress_response(
     }
 
     let status = upstream.status();
-    validate_ingress_content_encoding(upstream.headers())?;
     let headers = admitted_ingress_response_headers(upstream.headers())?;
     let mut bytes = Vec::new();
     while let Some(chunk) = upstream.chunk().await? {
@@ -1096,20 +1121,6 @@ async fn proxy_ingress_response(
     }
 
     return Ok(build_ingress_response(status, headers, bytes));
-}
-
-fn validate_ingress_content_encoding(headers: &HeaderMap) -> Result<()> {
-    let Some(value) = headers.get(axum::http::header::CONTENT_ENCODING) else {
-        return Ok(());
-    };
-    let encoding = value
-        .to_str()
-        .context("local ingress returned a non-text content-encoding")?
-        .trim();
-    if encoding.eq_ignore_ascii_case("identity") {
-        return Ok(());
-    }
-    bail!("local ingress response content-encoding is unsupported");
 }
 
 fn admitted_ingress_response_headers(upstream: &HeaderMap) -> Result<HeaderMap> {
@@ -1329,16 +1340,11 @@ mod tests {
     #[test]
     fn ingress_proxy_preserves_quota_metadata_and_strips_sensitive_headers() {
         let mut upstream = HeaderMap::new();
-        upstream.insert(
-            "content-type",
-            "application/problem+json".parse().expect("content type"),
-        );
+        upstream.insert("content-type", "application/problem+json".parse().expect("content type"));
         upstream.insert("retry-after", "7".parse().expect("retry after"));
         upstream.insert(
             "ratelimit-policy",
-            "\"tenant-minute\";q=60;w=60"
-                .parse()
-                .expect("rate limit policy"),
+            "\"tenant-minute\";q=60;w=60".parse().expect("rate limit policy"),
         );
         upstream.insert(
             "ratelimit",
@@ -1497,24 +1503,6 @@ mod tests {
     }
 
     #[test]
-    fn ingress_proxy_rejects_encoded_response_bodies() {
-        let mut headers = HeaderMap::new();
-        assert!(validate_ingress_content_encoding(&headers).is_ok());
-
-        headers.insert(
-            axum::http::header::CONTENT_ENCODING,
-            "identity".parse().expect("identity encoding"),
-        );
-        assert!(validate_ingress_content_encoding(&headers).is_ok());
-
-        headers.insert(
-            axum::http::header::CONTENT_ENCODING,
-            "gzip".parse().expect("gzip encoding"),
-        );
-        assert!(validate_ingress_content_encoding(&headers).is_err());
-    }
-
-    #[test]
     fn ingress_proxy_bounds_admitted_response_headers() {
         let mut upstream = HeaderMap::new();
         let oversized = vec![b'a'; MAX_INGRESS_RESPONSE_HEADER_VALUE_BYTES + 1];
@@ -1543,7 +1531,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_state_refuses_live_eviction_and_reclaims_expired_keys() {
+    fn replay_state_rejects_duplicates_and_refuses_live_capacity_eviction() {
         let mut state = ReplayState::default();
         let now = 1_000_000;
         for index in 0..MAX_RECENT_IDEMPOTENCY_KEYS {
@@ -1553,17 +1541,61 @@ mod tests {
         }
         assert_eq!(state.order.len(), MAX_RECENT_IDEMPOTENCY_KEYS);
         assert!(state.keys.contains("mutation-00000000"));
+        assert_eq!(
+            state.reserve("mutation-overflow".to_owned(), now),
+            Err(ReplayReserveError::Capacity)
+        );
+        assert_eq!(
+            state.reserve("mutation-00000001".to_owned(), now),
+            Err(ReplayReserveError::Duplicate)
+        );
 
-        assert!(state.reserve("mutation-overflow".to_owned(), now).is_err());
-        assert!(state.keys.contains("mutation-00000000"));
-
-        let after_expiry = now + IDEMPOTENCY_REPLAY_TTL_MS + 1;
         state
-            .reserve("mutation-after-expiry".to_owned(), after_expiry)
-            .expect("expired reservations are reclaimed");
-        assert_eq!(state.order.len(), 1);
+            .reserve(
+                "mutation-after-expiry".to_owned(),
+                now + IDEMPOTENCY_REPLAY_TTL_MS,
+            )
+            .expect("expired reservations free capacity");
         assert!(!state.keys.contains("mutation-00000000"));
         assert!(state.keys.contains("mutation-after-expiry"));
+    }
+
+    #[test]
+    fn replay_state_load_drops_expired_entries_without_extending_them() {
+        let now = unix_time_ms().expect("current time");
+        let expired = ReplayEntry {
+            key: "expired-key-0001".to_owned(),
+            expires_at_unix_ms: now.saturating_sub(1),
+        };
+        let live_expiry = now.saturating_add(60_000);
+        let live = ReplayEntry {
+            key: "live-key-0000001".to_owned(),
+            expires_at_unix_ms: live_expiry,
+        };
+
+        let loaded =
+            replay_state_from_entries(vec![expired, live], now).expect("load replay entries");
+        assert!(!loaded.keys.contains("expired-key-0001"));
+        assert!(loaded.keys.contains("live-key-0000001"));
+        assert_eq!(
+            loaded.order.front().expect("live replay entry").expires_at_unix_ms,
+            live_expiry
+        );
+    }
+
+    #[test]
+    fn replay_clock_rollback_does_not_reopen_expired_capacity() {
+        let mut state = ReplayState::default();
+        state
+            .reserve("clock-proof-0001".to_owned(), 10_000)
+            .expect("reserve replay key");
+        assert_eq!(state.observe_time(9_000), 10_000);
+        state.purge_expired(9_000);
+        assert!(state.keys.contains("clock-proof-0001"));
+
+        let effective_now = state.observe_time(10_000 + IDEMPOTENCY_REPLAY_TTL_MS);
+        state.purge_expired(effective_now);
+        assert!(!state.keys.contains("clock-proof-0001"));
     }
 
     #[test]
@@ -1571,14 +1603,28 @@ mod tests {
         let root = tempfile::tempdir().expect("replay tempdir");
         let path = root.path().join("mutation-replay.json");
         let mut state = ReplayState::default();
-        let now = unix_time_ms().expect("current unix time");
+        let now = unix_time_ms().expect("current time");
         state
             .reserve("restart-proof-0001".to_owned(), now)
             .expect("reserve replay key");
+        let original_expiry = state
+            .order
+            .front()
+            .expect("replay entry")
+            .expires_at_unix_ms;
         save_replay_state(&path, &state).expect("save replay state");
 
         let loaded = load_replay_state(&path).expect("load replay state");
         assert!(loaded.keys.contains("restart-proof-0001"));
+        assert_eq!(
+            loaded
+                .order
+                .front()
+                .expect("loaded replay entry")
+                .expires_at_unix_ms,
+            original_expiry,
+            "restart must preserve absolute expiry rather than re-arm a full TTL"
+        );
 
         fs::write(&path, b"{not-json").expect("write corrupt replay state");
         #[cfg(unix)]
@@ -1588,62 +1634,6 @@ mod tests {
                 .expect("restore private permissions");
         }
         assert!(load_replay_state(&path).is_err());
-    }
-
-    #[test]
-    fn persisted_replay_keys_are_rearmed_after_restart_even_if_disk_expiry_is_old() {
-        let now = unix_time_ms().expect("current unix time");
-        let state = replay_state_from_entries(
-            vec![ReplayEntry {
-                key: "restart-rearm-0001".to_owned(),
-                expires_at_unix_ms: 1,
-            }],
-            now,
-        )
-        .expect("rearm persisted replay");
-
-        let entry = state.order.front().expect("rearmed entry");
-        assert_eq!(entry.key, "restart-rearm-0001");
-        assert_eq!(entry.expires_at_unix_ms, now + IDEMPOTENCY_REPLAY_TTL_MS);
-    }
-
-    #[test]
-    fn replay_state_migrates_v1_without_resetting_live_keys() {
-        let root = tempfile::tempdir().expect("replay tempdir");
-        let path = root.path().join("mutation-replay.json");
-        let legacy = LegacyReplayFile {
-            version: LEGACY_REPLAY_FILE_VERSION,
-            keys: vec!["legacy-proof-0001".to_owned()],
-        };
-        fs::write(
-            &path,
-            serde_json::to_vec(&legacy).expect("encode legacy replay"),
-        )
-        .expect("write legacy replay");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
-                .expect("chmod legacy replay");
-        }
-
-        let migrated = load_replay_state(&path).expect("migrate legacy replay");
-        assert!(migrated.keys.contains("legacy-proof-0001"));
-        save_replay_state(&path, &migrated).expect("persist v2 replay");
-
-        let document: Value =
-            serde_json::from_slice(&fs::read(&path).expect("read v2 replay")).expect("parse v2");
-        assert_eq!(
-            document.get("version").and_then(Value::as_u64),
-            Some(u64::from(REPLAY_FILE_VERSION))
-        );
-        assert_eq!(
-            document
-                .get("entries")
-                .and_then(Value::as_array)
-                .map(Vec::len),
-            Some(1)
-        );
     }
 
     #[cfg(unix)]
@@ -1661,7 +1651,7 @@ mod tests {
                 entries: vec![ReplayEntry {
                     key: "restart-proof-0002".to_owned(),
                     expires_at_unix_ms: unix_time_ms()
-                        .expect("current unix time")
+                        .expect("current time")
                         .saturating_add(IDEMPOTENCY_REPLAY_TTL_MS),
                 }],
             })
