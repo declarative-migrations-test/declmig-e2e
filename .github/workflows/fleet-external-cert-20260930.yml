@@ -27,9 +27,9 @@ jobs:
             sha: b0031455e364dbb169a27b0288e087d3ebd428cc
             kind: node
             workdir: client
-          - name: meta-agent #80 thiserror
+          - name: meta-agent #82 refreshed thiserror
             repo: meta-agents-demo/meta-agent-control-plane.rs
-            sha: d0ffbe3da2cbc1ad33b4803a24547897eb0fe9a2
+            sha: f88a7d7fb65e4d442de6e7e07bb96303d63bd513
             kind: rust
             workdir: .
           - name: meta-agent #76 clap
