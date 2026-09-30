@@ -829,7 +829,8 @@ async fn supervise_remote(control: Arc<RunControl>, request: CreateRunRequest) {
             .command_tx
             .send(start_command(run_id, lease_epoch, &request));
 
-        let outcome = run_remote_attempt(control.clone(), &mut events, remaining).await;
+        let outcome =
+            run_remote_attempt(control.clone(), &mut events, remaining, lease_epoch).await;
         if let Some(reason) = remote_cleanup_reason(&outcome)
             && let Err(error) = launcher
                 .send_command(
@@ -911,6 +912,7 @@ async fn run_remote_attempt(
     control: Arc<RunControl>,
     events: &mut broadcast::Receiver<WorkerEvent>,
     attempt_budget: Duration,
+    lease_epoch: u64,
 ) -> AttemptOutcome {
     let startup_deadline = Instant::now() + Duration::from_secs(REMOTE_STARTUP_TIMEOUT_SECONDS);
     let budget = sleep(attempt_budget);
@@ -956,6 +958,13 @@ async fn run_remote_attempt(
             }
             event = events.recv() => {
                 match event {
+                    Ok(event) if event.lease_epoch() != lease_epoch => {
+                        tracing::debug!(
+                            event_epoch = event.lease_epoch(),
+                            lease_epoch,
+                            "discarding buffered event from a different remote attempt"
+                        );
+                    }
                     Ok(WorkerEvent::Ready { .. }) => {
                         ready = true;
                     }
