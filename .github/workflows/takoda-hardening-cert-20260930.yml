@@ -1,0 +1,206 @@
+name: Takoda hardening external certification
+
+on:
+  push:
+    branches:
+      - cert/takoda-hardening-20260930
+
+permissions:
+  contents: read
+
+concurrency:
+  group: takoda-hardening-cert-20260930
+  cancel-in-progress: true
+
+jobs:
+  rust-candidates:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: main-server-35
+            repository: takoda-automation/tkda-main-server.rs
+            sha: a9227d3160769b9097a03a410ba5a650d9afee79
+            locked: "true"
+            all_features: "false"
+          - name: main-server-39
+            repository: takoda-automation/tkda-main-server.rs
+            sha: cecd14d5fde00756e019108afac644205d53c5f3
+            locked: "true"
+            all_features: "false"
+          - name: api-server-4
+            repository: takoda-automation/tkda-api-server.rs
+            sha: 1270b0a81d323ee7af61beeb992f989fdd84d7ea
+            locked: "false"
+            all_features: "false"
+          - name: mcp-server-2
+            repository: takoda-automation/tkda-mcp-server.rs
+            sha: 4c42c9766271c0f2896b4e9a07c411a3f006b3fc
+            locked: "false"
+            all_features: "false"
+          - name: desktop-daemon-11
+            repository: takoda-automation/tkda-desktop-daemon
+            sha: daf01a9bbc1cb2c40027b9ba007a4eb1b2e76e86
+            locked: "false"
+            all_features: "true"
+    steps:
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "${FLEET_GITHUB_READ_TOKEN:-}" || {
+            echo "::error::FLEET_GITHUB_READ_TOKEN is not configured"
+            exit 78
+          }
+
+      - name: Check out exact private candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.sha }}
+          path: source
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact candidate
+        shell: bash
+        run: test "$(git -C source rev-parse HEAD)" = "${{ matrix.sha }}"
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.90.0
+          components: rustfmt,clippy
+
+      - name: Require declared Cargo lock when locked
+        if: matrix.locked == 'true'
+        working-directory: source
+        run: test -f Cargo.lock
+
+      - name: Check formatting
+        working-directory: source
+        run: cargo fmt --all -- --check
+
+      - name: Cargo check
+        if: matrix.locked == 'false'
+        working-directory: source
+        run: cargo check --all-targets
+
+      - name: Cargo check locked
+        if: matrix.locked == 'true'
+        working-directory: source
+        run: cargo check --locked --all-targets
+
+      - name: Clippy
+        if: matrix.locked == 'false' && matrix.all_features == 'false'
+        working-directory: source
+        run: cargo clippy --all-targets -- -D warnings -A clippy::needless-return
+
+      - name: Clippy all features
+        if: matrix.locked == 'false' && matrix.all_features == 'true'
+        working-directory: source
+        run: cargo clippy --all-targets --all-features -- -D warnings -A clippy::needless-return -A clippy::match-like-matches-macro
+
+      - name: Clippy locked
+        if: matrix.locked == 'true'
+        working-directory: source
+        run: cargo clippy --locked --all-targets -- -D warnings -A clippy::needless-return
+
+      - name: Tests
+        if: matrix.locked == 'false'
+        working-directory: source
+        run: cargo test --all-targets
+
+      - name: Tests locked
+        if: matrix.locked == 'true'
+        working-directory: source
+        run: cargo test --locked --all-targets
+
+      - name: Verify source remained clean
+        working-directory: source
+        run: |
+          git diff --exit-code
+          git diff --cached --exit-code
+
+  monorepo-tool:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Require private fleet read credential
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: test -n "${FLEET_GITHUB_READ_TOKEN:-}"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: takoda-automation/tkda-monorepo
+          ref: 5f0dca4d85b8b1139ff3dea8cdbb4052b554f624
+          path: source
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+      - run: test "$(git -C source rev-parse HEAD)" = "5f0dca4d85b8b1139ff3dea8cdbb4052b554f624"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.88.0
+          components: rustfmt,clippy
+      - working-directory: source
+        run: cargo fmt --manifest-path tools/tkda-monorepo-tool/Cargo.toml --all -- --check
+      - working-directory: source
+        run: cargo check --locked --manifest-path tools/tkda-monorepo-tool/Cargo.toml --all-targets
+      - working-directory: source
+        run: cargo test --locked --manifest-path tools/tkda-monorepo-tool/Cargo.toml --all-targets
+      - working-directory: source
+        run: cargo clippy --locked --manifest-path tools/tkda-monorepo-tool/Cargo.toml --all-targets -- -D warnings
+      - working-directory: source
+        run: bash -n scripts/local-desktop.sh scripts/doctor.sh
+      - working-directory: source
+        run: git diff --exit-code
+
+  desktop-common-consumer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TAKODA_SHA: bf81d42e89748359d4db30e9f06483717a444c03
+      COMMON_SHA: 21851fcb6ca59fe4cfe887d882dac78d90548ce4
+    steps:
+      - name: Require private fleet read credential
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: test -n "${FLEET_GITHUB_READ_TOKEN:-}"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: takoda-automation/tkda-desktop-infra
+          ref: ${{ env.TAKODA_SHA }}
+          path: consumer
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+      - run: test "$(git -C consumer rev-parse HEAD)" = "$TAKODA_SHA"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: ORESoftware/ores-common-desktop-infra
+          ref: ${{ env.COMMON_SHA }}
+          path: consumer/tmp/dev/ores-common-desktop-infra
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+      - run: test "$(git -C consumer/tmp/dev/ores-common-desktop-infra rev-parse HEAD)" = "$COMMON_SHA"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.88.0
+      - name: Run common consumer checker
+        working-directory: consumer
+        env:
+          ORES_COMMON_DESKTOP_EXPECTED_REVISION: ${{ env.COMMON_SHA }}
+        run: |
+          cargo run --locked             --manifest-path tmp/dev/ores-common-desktop-infra/daemon/rust/Cargo.toml             --bin ores-common-desktop-consumer-check
+      - name: Run Takoda native contract
+        working-directory: consumer
+        run: cargo test --manifest-path tools/tkda-desktop-tool/Cargo.toml contract::tests::repository_contract_is_consistent -- --exact
+      - working-directory: consumer
+        run: git diff --exit-code
