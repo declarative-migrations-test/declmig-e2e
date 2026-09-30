@@ -66,7 +66,8 @@ jobs:
 
           for workflow in \
             .github/workflows/private-external-cert.yml \
-            .github/workflows/desktop-fleet-certification.yml
+            .github/workflows/desktop-fleet-certification.yml \
+            .github/workflows/external-pr-cert.yml
           do
             test -f "$workflow"
             grep -F 'workflow_dispatch:' "$workflow"
@@ -84,6 +85,10 @@ jobs:
 
           desktop=.github/workflows/desktop-fleet-certification.yml
           test "$(grep -Fc 'token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}' "$desktop")" -ge 3
+
+          external=.github/workflows/external-pr-cert.yml
+          test "$(grep -Fc 'token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}' "$external")" -ge 5
+          test "$(grep -Fc 'Require private fleet read credential' "$external")" -eq 3
 
           consumer="$(sed -n '/^  consumer-infra:/,$p' "$desktop")"
           require_line="$(printf '%s\n' "$consumer" | grep -n -m1 'Require private fleet read credential' | cut -d: -f1)"
