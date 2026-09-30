@@ -63,17 +63,32 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          workflow=.github/workflows/private-external-cert.yml
-          test -f "$workflow"
-          grep -F 'workflow_dispatch:' "$workflow"
-          if grep -Fq 'pull_request:' "$workflow"; then
-            echo "private certification workflow must never run on pull_request" >&2
-            exit 1
-          fi
-          grep -F 'FLEET_GITHUB_READ_TOKEN' "$workflow"
-          grep -F 'persist-credentials: false' "$workflow"
-          grep -F 'Verify exact source checkout' "$workflow"
-          grep -F 'timeout-minutes:' "$workflow"
+
+          for workflow in \
+            .github/workflows/private-external-cert.yml \
+            .github/workflows/desktop-fleet-certification.yml
+          do
+            test -f "$workflow"
+            grep -F 'workflow_dispatch:' "$workflow"
+            if grep -Fq 'pull_request:' "$workflow"; then
+              echo "$workflow must never expose fleet credentials to pull_request" >&2
+              exit 1
+            fi
+            grep -F 'FLEET_GITHUB_READ_TOKEN' "$workflow"
+            grep -F 'persist-credentials: false' "$workflow"
+            grep -F 'timeout-minutes:' "$workflow"
+          done
+
+          private=.github/workflows/private-external-cert.yml
+          grep -F 'Verify exact source checkout' "$private"
+
+          desktop=.github/workflows/desktop-fleet-certification.yml
+          test "$(grep -Fc 'token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}' "$desktop")" -ge 3
+
+          consumer="$(sed -n '/^  consumer-infra:/,$p' "$desktop")"
+          require_line="$(printf '%s\n' "$consumer" | grep -n -m1 'Require private fleet read credential' | cut -d: -f1)"
+          checkout_line="$(printf '%s\n' "$consumer" | grep -n -m1 'Check out exact product infra head' | cut -d: -f1)"
+          test "$require_line" -lt "$checkout_line"
 
       - name: Verify clean tracked state
         shell: bash
