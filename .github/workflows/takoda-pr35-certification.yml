@@ -1,0 +1,63 @@
+name: Takoda PR35 exact-head certification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: takoda-pr35-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  certify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact Takoda source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: takoda-automation/tkda-main-server.rs
+          ref: d74018989ce9377a08e925b5f667edfe9753fe3e
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "d74018989ce9377a08e925b5f667edfe9753fe3e"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: '1.97.1'
+          components: rustfmt, clippy
+
+      - name: Format
+        working-directory: source
+        run: cargo fmt --all -- --check
+
+      - name: Check
+        working-directory: source
+        run: cargo check --all-targets
+
+      - name: Clippy
+        working-directory: source
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: source
+        run: cargo test --all-targets
+
+      - name: Verify tracked source remained unchanged
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
