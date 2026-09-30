@@ -1,0 +1,73 @@
+name: ORES DEN-266 normalize artifacts
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/ores-den266-normalize.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact harness head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
+
+      - name: Install Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: "1.25.0"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.95.0"
+
+      - name: Install Gleam
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124
+        with:
+          otp-version: "27.3.4.14"
+          gleam-version: "1.18.1"
+          rebar3-version: "3.24.0"
+
+      - name: Clone exact ORES head and normalize
+        shell: bash
+        env:
+          ORES_SHA: "403b7451cb58caa9dde3b0881d974f9a915472a9"
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/ORESoftware/ores-middleware.git /tmp/ores
+          git -C /tmp/ores fetch --depth=1 origin "$ORES_SHA"
+          git -C /tmp/ores checkout --detach "$ORES_SHA"
+          test "$(git -C /tmp/ores rev-parse HEAD)" = "$ORES_SHA"
+
+          gofmt -w /tmp/ores/src/golang/middleware.go /tmp/ores/src/golang/middleware_test.go
+          (cd /tmp/ores/src/gleam && gleam format src test)
+          (cd /tmp/ores && cargo generate-lockfile)
+
+          rm -rf fixtures/ores-den266-normalized
+          mkdir -p fixtures/ores-den266-normalized/src/golang
+          mkdir -p fixtures/ores-den266-normalized/src/gleam/src
+          mkdir -p fixtures/ores-den266-normalized/src/gleam/test
+          cp /tmp/ores/src/golang/middleware.go fixtures/ores-den266-normalized/src/golang/
+          cp /tmp/ores/src/golang/middleware_test.go fixtures/ores-den266-normalized/src/golang/
+          cp /tmp/ores/src/gleam/src/ores_middleware.gleam fixtures/ores-den266-normalized/src/gleam/src/
+          cp /tmp/ores/src/gleam/test/ores_middleware_test.gleam fixtures/ores-den266-normalized/src/gleam/test/
+          cp /tmp/ores/Cargo.lock fixtures/ores-den266-normalized/Cargo.lock
+
+      - name: Commit normalized artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fixtures/ores-den266-normalized
+          git commit -m "DEN-266 capture normalized ORES artifacts [skip ci]"
+          git push origin HEAD:${{ github.head_ref }}
