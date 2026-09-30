@@ -1,0 +1,57 @@
+name: Takoda public desktop CLI lockfile
+
+on:
+  push:
+    branches:
+      - audit/takoda-cert-20260930
+
+permissions:
+  contents: read
+
+concurrency:
+  group: takoda-desktop-cli-lock-20260930
+  cancel-in-progress: true
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact public desktop CLI
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: takoda-automation/tkda-desktop-cli
+          ref: 42a3e7102e4ea2d7b144dbb62f414c1a9a3c6aa9
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact source
+        run: test "$(git -C source rev-parse HEAD)" = "42a3e7102e4ea2d7b144dbb62f414c1a9a3c6aa9"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.88.0"
+          components: rustfmt,clippy
+
+      - name: Generate dependency lock
+        working-directory: source
+        run: cargo generate-lockfile
+
+      - name: Verify locked build
+        working-directory: source
+        run: |
+          cargo fmt --all -- --check
+          cargo check --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings -A clippy::needless-return
+          cargo test --locked --all-targets
+
+      - name: Upload reviewed lock candidate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tkda-desktop-cli-cargo-lock
+          path: source/Cargo.lock
+          if-no-files-found: error
+          retention-days: 7
