@@ -99,10 +99,7 @@ impl Default for Policy {
                 ("hour".to_owned(), 1000),
             ]),
             concurrency: 4,
-            costs: BTreeMap::from([
-                ("default".to_owned(), 1),
-                ("expensive".to_owned(), 5),
-            ]),
+            costs: BTreeMap::from([("default".to_owned(), 1), ("expensive".to_owned(), 5)]),
             idempotency_capacity: 1024,
         }
     }
@@ -423,11 +420,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use std::thread;
 
-    fn policy(
-        windows: &[(&str, u64)],
-        concurrency: usize,
-        costs: &[(&str, u64)],
-    ) -> Policy {
+    fn policy(windows: &[(&str, u64)], concurrency: usize, costs: &[(&str, u64)]) -> Policy {
         Policy {
             epoch: 10,
             windows: windows
@@ -478,10 +471,7 @@ mod tests {
 
         engine.reset_window_for_test("minute");
         let before = engine.snapshot();
-        assert_eq!(
-            engine.admit(request(Some("e"))).kind,
-            Kind::QuotaExhausted
-        );
+        assert_eq!(engine.admit(request(Some("e"))).kind, Kind::QuotaExhausted);
         assert_eq!(engine.snapshot(), before);
 
         engine.reset_window_for_test("ten-minute");
@@ -492,10 +482,7 @@ mod tests {
         engine.reset_window_for_test("minute");
         engine.reset_window_for_test("ten-minute");
         let before = engine.snapshot();
-        assert_eq!(
-            engine.admit(request(Some("g"))).kind,
-            Kind::QuotaExhausted
-        );
+        assert_eq!(engine.admit(request(Some("g"))).kind, Kind::QuotaExhausted);
         assert_eq!(engine.snapshot(), before);
     }
 
@@ -554,12 +541,7 @@ mod tests {
 
     #[test]
     fn epoch_and_backend_failures_do_not_debit() {
-        let engine = QuotaEngine::new(policy(
-            &[("minute", 10)],
-            1,
-            &[("default", 1)],
-        ))
-        .unwrap();
+        let engine = QuotaEngine::new(policy(&[("minute", 10)], 1, &[("default", 1)])).unwrap();
         let before = engine.snapshot();
 
         let stale = engine.admit(Request {
@@ -587,12 +569,7 @@ mod tests {
 
     #[test]
     fn capacity_is_distinct_and_release_is_fenced() {
-        let engine = QuotaEngine::new(policy(
-            &[("minute", 100)],
-            1,
-            &[("default", 1)],
-        ))
-        .unwrap();
+        let engine = QuotaEngine::new(policy(&[("minute", 100)], 1, &[("default", 1)])).unwrap();
 
         let first = engine.admit(request(Some("a")));
         assert_eq!(first.kind, Kind::Allow);
@@ -645,10 +622,7 @@ mod tests {
         }
 
         let results = results.lock().unwrap();
-        assert_eq!(
-            results.iter().filter(|r| r.kind == Kind::Allow).count(),
-            4
-        );
+        assert_eq!(results.iter().filter(|r| r.kind == Kind::Allow).count(), 4);
         assert_eq!(
             results
                 .iter()
@@ -660,10 +634,7 @@ mod tests {
         assert_eq!(snapshot.active_leases, 4);
         assert_eq!(
             snapshot.usage,
-            BTreeMap::from([
-                ("hour".to_owned(), 4),
-                ("minute".to_owned(), 4),
-            ])
+            BTreeMap::from([("hour".to_owned(), 4), ("minute".to_owned(), 4),])
         );
     }
 
