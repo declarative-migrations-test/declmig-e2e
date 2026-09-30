@@ -1,0 +1,77 @@
+name: Fleet external PR certification 2026-09-30
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/fleet-external-cert-20260930.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fleet-external-cert-20260930-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  exact-head:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: meta-agent #83 refreshed clap
+            repo: meta-agents-demo/meta-agent-control-plane.rs
+            sha: c9a719367ca86b1591f826848689f4df229a4843
+          - name: benefactor mcp #32 otlp
+            repo: benefactor-cc/benefactor-mcp-server.rs
+            sha: 64f98f9aedfc3583e7370f7ac5bdd2909846c46e
+          - name: praxonne cli #6 clap
+            repo: praxonne/praxonne-cli
+            sha: ec74bf9cfd85944ed53d08fb2b5215ac95156a98
+
+    steps:
+      - name: Check out exact external head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.sha }}
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+          submodules: recursive
+          show-progress: false
+
+      - name: Prove exact external head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${{ matrix.sha }}"
+          test "$(git -C source status --porcelain)" = ""
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: stable
+          components: rustfmt,clippy
+
+      - name: Rust locked verification
+        shell: bash
+        working-directory: source
+        run: |
+          set -euo pipefail
+          cargo metadata --locked --format-version 1 >/dev/null
+          cargo fmt --all --check
+          cargo check --locked --all-targets
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked --all-targets
+
+      - name: Prove candidate checkout remained immutable
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${{ matrix.sha }}"
+          test "$(git -C source status --porcelain --untracked-files=no)" = ""
