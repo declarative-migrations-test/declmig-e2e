@@ -429,7 +429,10 @@ fn runtime_boundary_matches(
             | (RuntimeFamily::Lunatic, CodeLoadingBoundary::LunaticModule)
             | (RuntimeFamily::NativeRust, CodeLoadingBoundary::Process)
             | (RuntimeFamily::NativePony, CodeLoadingBoundary::Process)
-            | (RuntimeFamily::GpuHost, CodeLoadingBoundary::GpuExecutionGeneration)
+            | (
+                RuntimeFamily::GpuHost,
+                CodeLoadingBoundary::GpuExecutionGeneration
+            )
     );
 }
 
