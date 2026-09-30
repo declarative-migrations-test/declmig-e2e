@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   certify:
@@ -18,10 +18,11 @@ jobs:
       run:
         working-directory: fixtures/scintilla-desktop-daemon
     steps:
-      - name: Check out exact revision
+      - name: Check out exact PR head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: true
       - name: Install Rust 1.90
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
@@ -35,6 +36,18 @@ jobs:
           name: scintilla-cargo-lock
           path: fixtures/scintilla-desktop-daemon/Cargo.lock
           if-no-files-found: error
+      - name: Commit generated lock evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "DEN-266 capture generated Scintilla Cargo.lock [skip ci]"
+          git push origin HEAD:${{ github.head_ref }}
       - name: Format
         run: cargo +1.90.0 fmt --all -- --check
       - name: Clippy
