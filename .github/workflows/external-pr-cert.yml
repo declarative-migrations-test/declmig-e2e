@@ -1,7 +1,6 @@
 name: External PR certification
 
 on:
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -9,7 +8,7 @@ permissions:
 
 concurrency:
   group: external-pr-cert-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   ores-cli:
@@ -33,12 +32,24 @@ jobs:
           - pr: 294
             sha: 5b6b9f854e13295ab1437261e99ebbe169eb9032
     steps:
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FLEET_GITHUB_READ_TOKEN:-}" ]; then
+            echo "::error::FLEET_GITHUB_READ_TOKEN is not configured in this repository"
+            exit 78
+          fi
+
       - name: Check out exact source head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ORESoftware/ores-cli
           ref: ${{ matrix.sha }}
           path: source
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
           persist-credentials: false
           show-progress: false
 
@@ -103,12 +114,24 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FLEET_GITHUB_READ_TOKEN:-}" ]; then
+            echo "::error::FLEET_GITHUB_READ_TOKEN is not configured in this repository"
+            exit 78
+          fi
+
       - name: Check out exact PR 40 head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ORESoftware/ores-cli
           ref: 331537336936e1bef54799c3d94403108ee020e9
           path: source
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
           persist-credentials: false
 
       - name: Verify exact reviewed head
@@ -139,6 +162,7 @@ jobs:
           repository: ORESoftware/ores-interfaces
           ref: ${{ steps.shared.outputs.revision }}
           path: source/.deps/shared-interfaces
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
           persist-credentials: false
 
       - name: Resolve shared package peer pins
@@ -165,6 +189,7 @@ jobs:
           repository: ores-otel/ores-interfaces
           ref: ${{ steps.peers.outputs.source }}
           path: source/.deps/shared-interfaces/.deps/compat
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
           persist-credentials: false
 
       - name: Check out immutable TJSV toolchain
@@ -173,6 +198,7 @@ jobs:
           repository: ORESoftware/typespec-json-schema-validator
           ref: ${{ steps.peers.outputs.validator }}
           path: source/.deps/shared-interfaces/.deps/tjsv
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
           persist-credentials: false
 
       - name: Install TJSV lockfile dependencies
@@ -230,12 +256,24 @@ jobs:
     env:
       TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/takoda_test
     steps:
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FLEET_GITHUB_READ_TOKEN:-}" ]; then
+            echo "::error::FLEET_GITHUB_READ_TOKEN is not configured in this repository"
+            exit 78
+          fi
+
       - name: Check out exact PR 2 head
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           repository: takoda-automation/tkda-orm-core
           ref: 5b5d5926bde58bcea4512042835e3f55dad99aeb
           path: source
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
           persist-credentials: false
 
       - name: Verify exact reviewed head
