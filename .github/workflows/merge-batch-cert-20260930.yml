@@ -1,0 +1,91 @@
+name: Merge batch exact-head certification 2026-09-30
+
+on:
+  push:
+    branches:
+      - ci/merge-batch-cert-20260930
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rust-exact-head:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: orm-core-template-24
+            repo: ORESoftware/orm-core-template.rs
+            sha: 1b6c049056287da6eb48b125f1a75b5afd86ffe8
+            toolchain: '1.88.0'
+            workdir: '.'
+          - name: common-desktop-ipc-76
+            repo: ORESoftware/ores-common-desktop-infra
+            sha: 2f27ebf4fdbeeb6df842fd73474a395eb697bfaf
+            toolchain: '1.82.0'
+            workdir: '.'
+          - name: ores-orm-core-11
+            repo: ORESoftware/ores-orm-core
+            sha: 24e21212b8f08f4f487b79d854cf3f9653e2f973
+            toolchain: '1.88.0'
+            workdir: '.'
+          - name: ores-lambda-15
+            repo: ORESoftware/ores-lambda
+            sha: a804d5307d4924907301c230b8c59bc41dbf2ae0
+            toolchain: '1.88.0'
+            workdir: '.'
+          - name: ores-transport-20
+            repo: ORESoftware/ores-transport
+            sha: 3ac5f5cc45df61b2ecc90e990741a257fc689ab0
+            toolchain: '1.88.0'
+            workdir: '.'
+          - name: ores-rl-clients-8
+            repo: ores-rate-limit/ores-rl-clients
+            sha: 7123cad12a80d87afb0e94f575d5c7a89e65c6b7
+            toolchain: '1.88.0'
+            workdir: 'rust'
+    steps:
+      - name: Check out exact source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.sha }}
+          path: source
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: recursive
+          show-progress: false
+      - name: Prove exact source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${{ matrix.sha }}"
+          test -z "$(git -C source status --porcelain)"
+      - name: Install declared Rust floor
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt,clippy
+      - name: Locked Rust verification
+        shell: bash
+        working-directory: source/${{ matrix.workdir }}
+        run: |
+          set -euo pipefail
+          locked=()
+          if [[ -f Cargo.lock ]]; then locked+=(--locked); fi
+          cargo metadata "${locked[@]}" --format-version 1 >/dev/null
+          cargo fmt --all -- --check
+          cargo check "${locked[@]}" --workspace --all-targets --all-features
+          cargo clippy "${locked[@]}" --workspace --all-targets --all-features -- -D warnings
+          cargo test "${locked[@]}" --workspace --all-targets --all-features
+      - name: Prove tracked source remained immutable
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C source rev-parse HEAD)" = "${{ matrix.sha }}"
+          test -z "$(git -C source status --porcelain --untracked-files=no)"
