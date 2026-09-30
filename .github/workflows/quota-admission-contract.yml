@@ -3,7 +3,7 @@ name: quota-admission-contract
 on:
   pull_request:
     paths:
-      - "tests/quota_admission_contract.py"
+      - "tools/quota-admission-contract/**"
       - ".github/workflows/quota-admission-contract.yml"
   workflow_dispatch:
 
@@ -17,10 +17,11 @@ concurrency:
 jobs:
   conformance:
     runs-on: ubuntu-slim
-    timeout-minutes: 5
+    timeout-minutes: 8
     env:
       EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-      PYTHONDONTWRITEBYTECODE: "1"
+      RUSTUP_TOOLCHAIN: "1.90.0"
+      CARGO_TERM_COLOR: always
     steps:
       - name: Check out exact certification head
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -35,14 +36,40 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
 
-      - name: Compile reference model
+      - name: Install pinned Rust toolchain
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m py_compile tests/quota_admission_contract.py
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" \
+            --profile minimal \
+            --component rustfmt \
+            --component clippy \
+            --no-self-update
+
+      - name: Check formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +"$RUSTUP_TOOLCHAIN" fmt \
+            --manifest-path tools/quota-admission-contract/Cargo.toml \
+            --check
+
+      - name: Lint conformance model
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo +"$RUSTUP_TOOLCHAIN" clippy \
+            --manifest-path tools/quota-admission-contract/Cargo.toml \
+            --all-targets \
+            --offline \
+            -- \
+            -D warnings
 
       - name: Verify quota and admission invariants
         shell: bash
         run: |
           set -euo pipefail
-          python3 tests/quota_admission_contract.py
+          cargo +"$RUSTUP_TOOLCHAIN" test \
+            --manifest-path tools/quota-admission-contract/Cargo.toml \
+            --all-targets \
+            --offline
