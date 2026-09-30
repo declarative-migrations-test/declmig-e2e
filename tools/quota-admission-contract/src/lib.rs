@@ -137,6 +137,8 @@ pub struct Snapshot {
 #[derive(Clone, Debug)]
 struct Completed {
     fingerprint: String,
+    operation: String,
+    cost: u64,
     decision: Decision,
 }
 
@@ -233,7 +235,10 @@ impl QuotaEngine {
 
         if let Some(key) = request.idempotency_key {
             if let Some(prior) = inner.completed.get(key).cloned() {
-                if prior.fingerprint != request.fingerprint {
+                if prior.fingerprint != request.fingerprint
+                    || prior.operation != request.operation
+                    || prior.cost != cost
+                {
                     return Decision::new(Kind::IdempotencyConflict, 409);
                 }
                 let mut replay = prior.decision;
@@ -283,6 +288,8 @@ impl QuotaEngine {
                 key,
                 Completed {
                     fingerprint: request.fingerprint.to_owned(),
+                    operation: request.operation.to_owned(),
+                    cost,
                     decision: decision.clone(),
                 },
             );
@@ -332,10 +339,21 @@ impl BoundedQueue {
     }
 
     pub fn enqueue(&mut self, item: impl Into<String>, deadline: u64) -> bool {
-        // HOT-PATH (imperative by design): VecDeque gives O(1) push/pop semantics.
-        if self.items.len() >= self.limit {
+        self.enqueue_at(item, deadline, 0)
+    }
+
+    pub fn enqueue_at(&mut self, item: impl Into<String>, deadline: u64, now: u64) -> bool {
+        while self
+            .items
+            .front()
+            .is_some_and(|(_, queued_deadline)| *queued_deadline < now)
+        {
+            self.items.pop_front();
+        }
+        if deadline < now || self.items.len() >= self.limit {
             return false;
         }
+        // HOT-PATH (imperative by design): VecDeque gives O(1) push/pop semantics.
         self.items.push_back((item.into(), deadline));
         true
     }
@@ -393,6 +411,50 @@ pub fn retry_delay_secs(
     retry_after
         .and_then(|raw| raw.trim().parse::<u64>().ok())
         .or(rate_limit_hint_secs)
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct BackoffState {
+    pub not_before_ms: u64,
+    pub concurrency_limit: u32,
+}
+
+impl BackoffState {
+    #[must_use]
+    pub const fn new(concurrency_limit: u32) -> Self {
+        Self {
+            not_before_ms: 0,
+            concurrency_limit,
+        }
+    }
+
+    pub fn apply_hint(
+        &mut self,
+        now_ms: u64,
+        delay_ms: u64,
+        jitter_ms: u64,
+        suggested_concurrency: Option<u32>,
+    ) {
+        let bounded_jitter = jitter_ms.min(delay_ms / 4);
+        let candidate = now_ms
+            .saturating_add(delay_ms)
+            .saturating_add(bounded_jitter);
+        self.not_before_ms = self.not_before_ms.max(candidate);
+        if let Some(limit) = suggested_concurrency.filter(|limit| *limit > 0) {
+            self.concurrency_limit = self.concurrency_limit.min(limit);
+        }
+    }
+}
+
+pub const fn expected_http_status(kind: Kind) -> u16 {
+    match kind {
+        Kind::InvalidOperation | Kind::InvalidRequest => 400,
+        Kind::StaleQuotaEpoch => 401,
+        Kind::IdempotencyConflict => 409,
+        Kind::QuotaExhausted => 429,
+        Kind::CapacityExhausted | Kind::BackendUnavailable | Kind::FutureQuotaEpoch => 503,
+        Kind::Allow => 200,
+    }
 }
 
 pub fn rate_limit_headers(
@@ -529,6 +591,14 @@ mod tests {
             ..Request::default()
         });
         assert_eq!(conflict.kind, Kind::IdempotencyConflict);
+
+        let operation_conflict = engine.admit(Request {
+            operation: "default",
+            idempotency_key: Some("same"),
+            fingerprint: "payload-A",
+            ..Request::default()
+        });
+        assert_eq!(operation_conflict.kind, Kind::IdempotencyConflict);
 
         assert!(engine.release(first.lease.unwrap()));
         for key in ["two", "three"] {
@@ -738,6 +808,45 @@ mod tests {
         assert_eq!(queue.pop_ready(10).as_deref(), Some("live"));
         assert!(queue.pop_ready(10).is_none());
         assert!(queue.is_empty());
+    }
+
+    #[test]
+    fn stale_hint_cannot_shorten_existing_backoff_or_raise_concurrency() {
+        let mut state = BackoffState::new(8);
+        state.apply_hint(1_000, 10_000, 0, Some(2));
+        state.apply_hint(1_100, 500, 0, Some(6));
+        assert_eq!(
+            state,
+            BackoffState {
+                not_before_ms: 11_000,
+                concurrency_limit: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn expired_queue_pressure_is_reclaimed_before_enqueue() {
+        let mut queue = BoundedQueue::new(1).unwrap();
+        assert!(queue.enqueue("old", 5));
+        assert!(queue.enqueue_at("fresh", 20, 10));
+        assert_eq!(queue.len(), 1);
+        assert_eq!(queue.pop_ready(10).as_deref(), Some("fresh"));
+    }
+
+    #[test]
+    fn admission_failure_http_semantics_are_stable() {
+        for (kind, status) in [
+            (Kind::InvalidOperation, 400),
+            (Kind::InvalidRequest, 400),
+            (Kind::StaleQuotaEpoch, 401),
+            (Kind::IdempotencyConflict, 409),
+            (Kind::QuotaExhausted, 429),
+            (Kind::CapacityExhausted, 503),
+            (Kind::BackendUnavailable, 503),
+            (Kind::FutureQuotaEpoch, 503),
+        ] {
+            assert_eq!(expected_http_status(kind), status);
+        }
     }
 
     #[test]
