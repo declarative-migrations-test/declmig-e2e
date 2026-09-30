@@ -103,6 +103,35 @@ jobs:
           checkout_line="$(printf '%s\n' "$consumer" | grep -n -m1 'Check out exact product infra head' | cut -d: -f1)"
           test "$require_line" -lt "$checkout_line"
 
+      - name: Enforce public carrier source boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          grep -Fx 'snapshots/' .gitignore
+          grep -F 'Never copy, vendor, mirror, snapshot, or commit source code from a private repository here' AGENTS.md
+
+          if git ls-files 'snapshots/**' | grep -q .; then
+            echo "tracked snapshots/ content is forbidden in this public carrier" >&2
+            git ls-files 'snapshots/**' >&2
+            exit 1
+          fi
+
+          risky_fixture_sources="$(
+            while IFS= read -r path; do
+              case "$path" in
+                *.rs|*.go|*.c|*.cc|*.cpp|*.cxx|*.h|*.hpp|*.m|*.mm|*.cs|*.fs|*.fsx|*.java|*.kt|*.kts|*.scala|*.clj|*.cljs|*.swift|*.zig|*.pony|*.erl|*.hrl|*.ex|*.exs|*.gleam|*.py|*.rb|*.php|*.lua|*.r|*.js|*.jsx|*.mjs|*.cjs|*.ts|*.tsx|*.dart|*.wasm|*.wat|*.sh|*.bash|*.zsh|*.ps1)
+                  printf '%s\n' "$path"
+                  ;;
+              esac
+            done < <(git ls-files 'fixtures/**')
+          )"
+          if [ -n "$risky_fixture_sources" ]; then
+            echo "application source under fixtures/ is forbidden in this public carrier" >&2
+            printf '%s\n' "$risky_fixture_sources" >&2
+            exit 1
+          fi
+
       - name: Verify clean tracked state
         shell: bash
         run: git diff --exit-code
