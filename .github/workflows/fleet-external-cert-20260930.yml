@@ -67,6 +67,7 @@ jobs:
           path: source
           persist-credentials: false
           fetch-depth: 1
+          submodules: recursive
           show-progress: false
 
       - name: Prove exact external head
