@@ -6,7 +6,7 @@ on:
       - audit/takoda-cert-20260930
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: takoda-desktop-cli-lock-20260930
@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   lockfile:
+    if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -48,6 +49,10 @@ jobs:
           cargo clippy --locked --all-targets -- -D warnings -A clippy::needless-return
           cargo test --locked --all-targets
 
+      - name: Verify deterministic lock digest
+        working-directory: source
+        run: echo "df774beaf224243eea205fff38d473e28fd5123de32b85e1856178bcc62157a9  Cargo.lock" | sha256sum --check -
+
       - name: Upload reviewed lock candidate
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -55,3 +60,20 @@ jobs:
           path: source/Cargo.lock
           if-no-files-found: error
           retention-days: 7
+
+      - name: Publish reviewed lock evidence on this carrier branch
+        shell: bash
+        env:
+          BRANCH: audit/takoda-cert-20260930
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          cp source/Cargo.lock evidence/tkda-desktop-cli.Cargo.lock
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add evidence/tkda-desktop-cli.Cargo.lock
+          if git diff --cached --quiet; then
+            exit 0
+          fi
+          git commit -m "test: publish reviewed Takoda desktop CLI lock [skip ci]"
+          git push origin "HEAD:$BRANCH"
