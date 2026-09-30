@@ -1,7 +1,6 @@
 name: Desktop fleet external certification
 
 on:
-  pull_request:
   workflow_dispatch:
 
 permissions:
@@ -9,7 +8,7 @@ permissions:
 
 concurrency:
   group: desktop-fleet-cert-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   COMMON_REPOSITORY: ORESoftware/ores-common-desktop-infra
@@ -26,7 +25,10 @@ jobs:
           FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
         run: |
           set -euo pipefail
-          test -n "${FLEET_GITHUB_READ_TOKEN:-}"
+          if [ -z "${FLEET_GITHUB_READ_TOKEN:-}" ]; then
+            echo "::error::FLEET_GITHUB_READ_TOKEN is not configured in this repository"
+            exit 78
+          fi
 
       - name: Check out exact common desktop head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -64,6 +66,14 @@ jobs:
         working-directory: source
         run: cargo +1.82 test --locked -p ores-common-desktop-conformance
 
+      - name: Verify source remained clean
+        working-directory: source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
+
   consumer-infra:
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -96,12 +106,23 @@ jobs:
             repository: graal-show/gs-desktop-infra
             sha: 3f2de0ceb088aed37468434f320382e7e753d111
     steps:
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FLEET_GITHUB_READ_TOKEN:-}" ]; then
+            echo "::error::FLEET_GITHUB_READ_TOKEN is not configured in this repository"
+            exit 78
+          fi
       - name: Check out exact product infra head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: ${{ matrix.repository }}
           ref: ${{ matrix.sha }}
           path: consumer
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
           persist-credentials: false
           show-progress: false
 
@@ -109,13 +130,6 @@ jobs:
         shell: bash
         run: test "$(git -C consumer rev-parse HEAD)" = "${{ matrix.sha }}"
 
-      - name: Require private fleet read credential
-        shell: bash
-        env:
-          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
-        run: |
-          set -euo pipefail
-          test -n "${FLEET_GITHUB_READ_TOKEN:-}"
 
       - name: Check out exact common desktop head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -141,4 +155,14 @@ jobs:
         env:
           ORES_COMMON_DESKTOP_EXPECTED_REVISION: ${{ env.COMMON_SHA }}
         run: |
-          cargo +1.82 run --locked             --manifest-path tmp/dev/ores-common-desktop-infra/daemon/rust/Cargo.toml             --bin ores-common-desktop-consumer-check
+          cargo +1.82 run --locked \
+            --manifest-path tmp/dev/ores-common-desktop-infra/daemon/rust/Cargo.toml \
+            --bin ores-common-desktop-consumer-check
+
+      - name: Verify consumer remained clean
+        working-directory: consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          git diff --cached --exit-code
