@@ -24,13 +24,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git hash-object cert/pr64/policy/src/lib.rs)" = "4f20281aa0191b1245e0fb64e60ef83e20174c40"
+          test "$(git hash-object cert/pr64/policy/src/lib.rs)" = "1169c6de472ef0191e118297a5186af1d037da57"
           test "$(git hash-object cert/pr64/infra/src/reload.rs)" = "0af8c038598c4b3ca8f76f2094a31a5b38b6662f"
-          test "$(git hash-object cert/pr64/capabilities.json)" = "e683babf6ee7764d7018694bbd0dab2398252225"
+          test "$(git hash-object cert/pr64/capabilities.json)" = "888524d9bda5d5c189bb1ab20f08ccab995fc809"
           jq -e '.capabilities["release-activation-policy"].transaction_authority == "runtime-generation/rust"' cert/pr64/capabilities.json >/dev/null
           jq -e '.capabilities["release-activation-policy"].selection_mode == "capability-negotiated-fail-closed"' cert/pr64/capabilities.json >/dev/null
           jq -e '.capabilities["release-activation-policy"].shared_drain_limits_with_hot_reload == true' cert/pr64/capabilities.json >/dev/null
-          printf '%s\n' "policy_head=0fb5019a16360b746fa0d32d13d1ac9dfbfd9edb"
+          jq -e '.capabilities["release-activation-policy"].in_process_certification_required == true' cert/pr64/capabilities.json >/dev/null
+          printf '%s\n' "policy_head=74525b033a48c4a97657e6e36f8c810efa4678f0"
       - name: Install Rust 1.82
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
