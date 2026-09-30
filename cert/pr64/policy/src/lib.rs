@@ -49,6 +49,8 @@ pub enum CodeLoadingBoundary {
 pub struct GenerationCapabilities {
     pub supports_process_generation: bool,
     pub supports_in_process_generation: bool,
+    #[serde(default)]
+    pub in_process_generation_certified: bool,
     pub supports_parallel_generations: bool,
     pub supports_pre_activation_health_check: bool,
     pub supports_atomic_activation: bool,
@@ -83,6 +85,7 @@ pub struct ActivationDecision {
 #[serde(rename_all = "snake_case")]
 pub enum FallbackReason {
     InProcessNotSupported,
+    InProcessNotCertified,
     ParallelGenerationsNotSupported,
     PreActivationHealthCheckNotSupported,
     AtomicActivationNotSupported,
@@ -440,6 +443,9 @@ fn in_process_blocker(capabilities: &GenerationCapabilities) -> Option<FallbackR
     if !capabilities.supports_in_process_generation {
         return Some(FallbackReason::InProcessNotSupported);
     }
+    if !capabilities.in_process_generation_certified {
+        return Some(FallbackReason::InProcessNotCertified);
+    }
     if !capabilities.supports_parallel_generations {
         return Some(FallbackReason::ParallelGenerationsNotSupported);
     }
@@ -515,6 +521,7 @@ mod tests {
                 "capabilities": {
                     "supports_process_generation": true,
                     "supports_in_process_generation": true,
+                    "in_process_generation_certified": true,
                     "supports_parallel_generations": true,
                     "supports_pre_activation_health_check": true,
                     "supports_atomic_activation": true,
@@ -609,6 +616,25 @@ mod tests {
         assert_eq!(
             decision.fallback_reason,
             Some(FallbackReason::GenerationFaultContainmentNotSupported)
+        );
+    }
+
+    #[test]
+    fn technically_capable_but_uncertified_in_process_falls_back() {
+        let mut value = valid();
+        value["release_activation"]["capabilities"]["in_process_generation_certified"] =
+            json!(false);
+        value["release_activation"]["capabilities"]["supports_generation_fault_containment"] =
+            json!(true);
+        let decision = select_release_activation(&value, ActivationStrategy::Auto, true)
+            .expect("uncertified in-process generation must use process fallback");
+        assert_eq!(
+            decision.selected_strategy,
+            ActivationStrategy::ProcessGeneration
+        );
+        assert_eq!(
+            decision.fallback_reason,
+            Some(FallbackReason::InProcessNotCertified)
         );
     }
 
