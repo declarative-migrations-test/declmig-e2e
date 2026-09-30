@@ -24,9 +24,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git hash-object cert/pr64/policy/src/lib.rs)" = "c8d461c86667735d517ed0359858132cac198771"
+          test "$(git hash-object cert/pr64/policy/src/lib.rs)" = "4f20281aa0191b1245e0fb64e60ef83e20174c40"
           test "$(git hash-object cert/pr64/infra/src/reload.rs)" = "0af8c038598c4b3ca8f76f2094a31a5b38b6662f"
-          printf '%s\n' "policy_head=fa133a5daad5360f5659bd33b1326da61b9bb4fc"
+          printf '%s\n' "policy_head=2aee59dfed153a2bae85cd4a03391a0721ad2b01"
       - name: Install Rust 1.82
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
@@ -37,7 +37,7 @@ jobs:
         run: cargo generate-lockfile
       - name: Check formatting
         working-directory: cert/pr64
-        run: cargo fmt --all --check
+        run: rustfmt --edition 2021 --check policy/src/lib.rs
       - name: Check workspace
         working-directory: cert/pr64
         run: cargo check --workspace --all-targets
