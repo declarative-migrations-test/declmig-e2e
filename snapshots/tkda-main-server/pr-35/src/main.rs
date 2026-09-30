@@ -404,7 +404,7 @@ async fn driver_command(
         .get(run_id)
         .ok_or_else(|| ApiError::not_found("run not found"))?;
 
-    ensure_running(&control).await?;
+    let lease_epoch = running_lease_epoch(&control).await?;
     let request_id = Uuid::new_v4();
     control
         .command_tx
@@ -418,7 +418,11 @@ async fn driver_command(
 
     return Ok((
         StatusCode::ACCEPTED,
-        Json(json!({"run_id": run_id, "request_id": request_id})),
+        Json(json!({
+            "run_id": run_id,
+            "request_id": request_id,
+            "lease_epoch": lease_epoch
+        })),
     ));
 }
 
@@ -431,7 +435,7 @@ async fn driver_command_wait(
     let control = registry
         .get(run_id)
         .ok_or_else(|| ApiError::not_found("run not found"))?;
-    ensure_running(&control).await?;
+    let lease_epoch = running_lease_epoch(&control).await?;
 
     let request_id = Uuid::new_v4();
     let mut events = control.event_tx.subscribe();
@@ -450,19 +454,28 @@ async fn driver_command_wait(
         loop {
             match events.recv().await {
                 Ok(WorkerEvent::DriverResponse {
+                    lease_epoch: response_epoch,
                     request_id: response_id,
                     status,
                     body,
-                    ..
-                }) if response_id == request_id => {
+                }) if response_epoch == lease_epoch && response_id == request_id => {
                     return Ok(json!({
                         "run_id": run_id,
                         "request_id": request_id,
+                        "lease_epoch": lease_epoch,
                         "status": status,
                         "body": body
                     }));
                 }
-                Ok(_) => continue,
+                Ok(_) => {
+                    let current_epoch = control.snapshot.read().await.lease_epoch;
+                    if current_epoch != lease_epoch {
+                        return Err(ApiError::conflict(
+                            "worker attempt changed while waiting for driver response",
+                        ));
+                    }
+                    continue;
+                },
                 Err(error) => {
                     return Err(ApiError::unavailable(format!(
                         "worker event channel failed: {error}"
@@ -485,15 +498,19 @@ async fn run_websocket(
     let control = registry
         .get(run_id)
         .ok_or_else(|| ApiError::not_found("run not found"))?;
-    ensure_running(&control).await?;
+    let lease_epoch = running_lease_epoch(&control).await?;
 
     return Ok(websocket
         .max_message_size(MAX_REQUEST_BYTES)
         .max_frame_size(256 * 1024)
-        .on_upgrade(move |socket| websocket_loop(socket, control)));
+        .on_upgrade(move |socket| websocket_loop(socket, control, lease_epoch)));
 }
 
-async fn websocket_loop(socket: WebSocket, control: std::sync::Arc<RunControl>) {
+async fn websocket_loop(
+    socket: WebSocket,
+    control: std::sync::Arc<RunControl>,
+    lease_epoch: u64,
+) {
     let (mut sender, mut receiver) = socket.split();
     let mut events = control.event_tx.subscribe();
 
@@ -502,6 +519,12 @@ async fn websocket_loop(socket: WebSocket, control: std::sync::Arc<RunControl>) 
             inbound = receiver.next() => {
                 match inbound {
                     Some(Ok(Message::Text(text))) => {
+                        if control.snapshot.read().await.lease_epoch != lease_epoch {
+                            let _ = sender.send(Message::Text(
+                                "{\"error\":\"worker attempt changed; reconnect required\"}".into()
+                            )).await;
+                            break;
+                        }
                         match serde_json::from_str::<WorkerCommand>(&text) {
                             Ok(command @ WorkerCommand::Driver { .. }) => {
                                 let valid = match &command {
@@ -551,6 +574,15 @@ async fn websocket_loop(socket: WebSocket, control: std::sync::Arc<RunControl>) 
             event = events.recv() => {
                 match event {
                     Ok(event) => {
+                        if event.lease_epoch() != lease_epoch {
+                            if control.snapshot.read().await.lease_epoch != lease_epoch {
+                                let _ = sender.send(Message::Text(
+                                    "{\"error\":\"worker attempt changed; reconnect required\"}".into()
+                                )).await;
+                                break;
+                            }
+                            continue;
+                        }
                         if let Ok(body) = serde_json::to_string(&event)
                             && sender.send(Message::Text(body.into())).await.is_err()
                         {
@@ -566,16 +598,20 @@ async fn websocket_loop(socket: WebSocket, control: std::sync::Arc<RunControl>) 
     }
 }
 
-async fn ensure_running(control: &RunControl) -> Result<(), ApiError> {
+async fn running_lease_epoch(control: &RunControl) -> Result<u64, ApiError> {
     let snapshot = control.snapshot.read().await;
-    if matches!(snapshot.status, RunStatus::Running) {
-        return Ok(());
+    if matches!(snapshot.status, RunStatus::Running) && snapshot.lease_epoch > 0 {
+        return Ok(snapshot.lease_epoch);
     }
 
-    return Err(ApiError::conflict(format!(
+    Err(ApiError::conflict(format!(
         "run is not accepting driver commands while status is {:?}",
         snapshot.status
-    )));
+    )))
+}
+
+async fn ensure_running(control: &RunControl) -> Result<(), ApiError> {
+    running_lease_epoch(control).await.map(|_| ())
 }
 
 struct ApiError {
