@@ -134,9 +134,7 @@ impl ReplayState {
             bail!("idempotency key was already used");
         }
         if self.order.len() >= MAX_RECENT_IDEMPOTENCY_KEYS {
-            bail!(
-                "idempotency replay capacity reached; refusing to evict a live reservation"
-            );
+            bail!("idempotency replay capacity reached; refusing to evict a live reservation");
         }
 
         let expires_at_unix_ms = now_unix_ms
@@ -494,16 +492,13 @@ async fn invoke(
         request = request.bearer_auth(token.as_ref());
     }
     let upstream = request.send().await.map_err(bad_gateway)?;
-    let release_idempotency =
-        is_definitive_quota_rejection(upstream.status(), upstream.headers());
-    if release_idempotency {
-        validate_ingress_content_encoding(upstream.headers()).map_err(bad_gateway)?;
-        admitted_ingress_response_headers(upstream.headers()).map_err(bad_gateway)?;
-        release_mutation(&headers, &state).await?;
-    }
+    let release_idempotency = is_definitive_quota_rejection(upstream.status(), upstream.headers());
     let response = proxy_ingress_response(upstream, MAX_INGRESS_RESPONSE_BYTES)
         .await
         .map_err(bad_gateway)?;
+    if release_idempotency {
+        release_mutation(&headers, &state).await?;
+    }
     return Ok(response);
 }
 
@@ -888,14 +883,10 @@ fn unix_time_ms() -> Result<u64> {
     let elapsed = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock is before the Unix epoch")?;
-    return u64::try_from(elapsed.as_millis())
-        .context("system clock milliseconds exceed u64");
+    return u64::try_from(elapsed.as_millis()).context("system clock milliseconds exceed u64");
 }
 
-fn replay_state_from_entries(
-    entries: Vec<ReplayEntry>,
-    now_unix_ms: u64,
-) -> Result<ReplayState> {
+fn replay_state_from_entries(entries: Vec<ReplayEntry>, now_unix_ms: u64) -> Result<ReplayState> {
     if entries.len() > MAX_RECENT_IDEMPOTENCY_KEYS {
         bail!(
             "mutation replay state contains {} entries; maximum is {MAX_RECENT_IDEMPOTENCY_KEYS}",
@@ -1338,11 +1329,16 @@ mod tests {
     #[test]
     fn ingress_proxy_preserves_quota_metadata_and_strips_sensitive_headers() {
         let mut upstream = HeaderMap::new();
-        upstream.insert("content-type", "application/problem+json".parse().expect("content type"));
+        upstream.insert(
+            "content-type",
+            "application/problem+json".parse().expect("content type"),
+        );
         upstream.insert("retry-after", "7".parse().expect("retry after"));
         upstream.insert(
             "ratelimit-policy",
-            "\"tenant-minute\";q=60;w=60".parse().expect("rate limit policy"),
+            "\"tenant-minute\";q=60;w=60"
+                .parse()
+                .expect("rate limit policy"),
         );
         upstream.insert(
             "ratelimit",
@@ -1558,11 +1554,7 @@ mod tests {
         assert_eq!(state.order.len(), MAX_RECENT_IDEMPOTENCY_KEYS);
         assert!(state.keys.contains("mutation-00000000"));
 
-        assert!(
-            state
-                .reserve("mutation-overflow".to_owned(), now)
-                .is_err()
-        );
+        assert!(state.reserve("mutation-overflow".to_owned(), now).is_err());
         assert!(state.keys.contains("mutation-00000000"));
 
         let after_expiry = now + IDEMPOTENCY_REPLAY_TTL_MS + 1;
@@ -1612,10 +1604,7 @@ mod tests {
 
         let entry = state.order.front().expect("rearmed entry");
         assert_eq!(entry.key, "restart-rearm-0001");
-        assert_eq!(
-            entry.expires_at_unix_ms,
-            now + IDEMPOTENCY_REPLAY_TTL_MS
-        );
+        assert_eq!(entry.expires_at_unix_ms, now + IDEMPOTENCY_REPLAY_TTL_MS);
     }
 
     #[test]
