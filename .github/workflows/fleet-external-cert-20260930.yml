@@ -22,41 +22,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: canonical-web #167 vitest
-            repo: canonical-cloud/canonical-web-server.rs
-            sha: b0031455e364dbb169a27b0288e087d3ebd428cc
-            kind: node
-            workdir: client
-          - name: meta-agent #82 refreshed thiserror
+          - name: meta-agent #83 refreshed clap
             repo: meta-agents-demo/meta-agent-control-plane.rs
-            sha: f88a7d7fb65e4d442de6e7e07bb96303d63bd513
-            kind: rust
-            workdir: .
-          - name: meta-agent #76 clap
-            repo: meta-agents-demo/meta-agent-control-plane.rs
-            sha: c8135c639d404ebe32737ae1ca73826e33055725
-            kind: rust
-            workdir: .
-          - name: discrete-event site #30 undici
-            repo: discrete-event-systems/discrete-event-systems.github.io
-            sha: c1bb674190b3fa694e11496000b471b885fa9377
-            kind: node
-            workdir: .
-          - name: apostille apme-cli #18 reqwest
-            repo: apostille-me/apme-cli
-            sha: f30002e06ed390ef57cc5ba098f9e65010fb494d
-            kind: rust
-            workdir: .
-          - name: hhm web #30 base64
-            repo: hacker-house-medellin/hhm-web-server.rs
-            sha: 3877c2b45e31cbd9c6460051f10d80b86cb4bde5
-            kind: rust
-            workdir: .
-          - name: ores-otel log #114 brace-expansion
-            repo: ores-otel/ores.otel.log
-            sha: cf2ac99180ad2c75b74506211c117c97121b4497
-            kind: node
-            workdir: .
+            sha: c9a719367ca86b1591f826848689f4df229a4843
+          - name: benefactor mcp #32 otlp
+            repo: benefactor-cc/benefactor-mcp-server.rs
+            sha: 64f98f9aedfc3583e7370f7ac5bdd2909846c46e
+          - name: praxonne cli #6 clap
+            repo: praxonne/praxonne-cli
+            sha: ec74bf9cfd85944ed53d08fb2b5215ac95156a98
 
     steps:
       - name: Check out exact external head
@@ -78,16 +52,14 @@ jobs:
           test "$(git -C source status --porcelain)" = ""
 
       - name: Install Rust toolchain
-        if: matrix.kind == 'rust'
         uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
         with:
           toolchain: stable
           components: rustfmt,clippy
 
       - name: Rust locked verification
-        if: matrix.kind == 'rust'
         shell: bash
-        working-directory: source/${{ matrix.workdir }}
+        working-directory: source
         run: |
           set -euo pipefail
           cargo metadata --locked --format-version 1 >/dev/null
@@ -95,25 +67,6 @@ jobs:
           cargo check --locked --all-targets
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked --all-targets
-
-      - name: Install Node.js
-        if: matrix.kind == 'node'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.16.0'
-          package-manager-cache: false
-
-      - name: Node lockfile verification
-        if: matrix.kind == 'node'
-        shell: bash
-        working-directory: source/${{ matrix.workdir }}
-        run: |
-          set -euo pipefail
-          test -f package-lock.json
-          npm ci --no-audit --no-fund
-          npm run typecheck --if-present
-          npm test --if-present
-          npm run build --if-present
 
       - name: Prove candidate checkout remained immutable
         if: always()
