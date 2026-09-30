@@ -106,3 +106,57 @@ jobs:
       - name: Go build
         working-directory: snapshots/tkda-main-server/pr-35/workers/go
         run: go build ./...
+
+
+  generate-fixups:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - name: Check out carrier PR branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.90.0"
+          components: rustfmt
+
+      - name: Generate deterministic lock and rustfmt outputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_root="$GITHUB_WORKSPACE/snapshots/tkda-main-server/pr-35"
+          work="$RUNNER_TEMP/tkda-pr35"
+          generated="$GITHUB_WORKSPACE/generated/tkda-main-server/pr-35"
+          rm -rf "$work" "$generated"
+          cp -a "$source_root" "$work"
+          (
+            cd "$work"
+            cargo generate-lockfile
+            cargo fmt
+            cargo fmt --manifest-path workers/rust/Cargo.toml
+          )
+          mkdir -p "$generated/src" "$generated/workers/rust/src"
+          cp "$work/Cargo.lock" "$generated/Cargo.lock"
+          cp "$work/src/"*.rs "$generated/src/"
+          cp "$work/workers/rust/src/main.rs" "$generated/workers/rust/src/main.rs"
+
+      - name: Persist generated fixups on evidence branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add generated/tkda-main-server/pr-35
+          if git diff --cached --quiet; then
+            echo "generated fixups already current"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test: persist Takoda PR 35 generated fixups"
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
