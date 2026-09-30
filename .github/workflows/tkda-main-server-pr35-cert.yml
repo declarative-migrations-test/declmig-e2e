@@ -1,0 +1,107 @@
+name: Takoda main-server PR 35 exact-head certification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tkda-main-server-pr35-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SOURCE_SHA: 430ed916d057b665e849a3fbff114310109064fd
+
+jobs:
+  certify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Require private fleet read credential
+        shell: bash
+        env:
+          FLEET_GITHUB_READ_TOKEN: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${FLEET_GITHUB_READ_TOKEN:-}" ]; then
+            echo "::error::FLEET_GITHUB_READ_TOKEN is not configured in this repository"
+            exit 78
+          fi
+
+      - name: Check out exact Takoda source head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: takoda-automation/tkda-main-server.rs
+          ref: ${{ env.SOURCE_SHA }}
+          path: source
+          token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}
+          persist-credentials: false
+          show-progress: false
+
+      - name: Verify exact Takoda source head
+        run: test "$(git -C source rev-parse HEAD)" = "$SOURCE_SHA"
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: "1.90.0"
+          components: rustfmt,clippy
+
+      - name: Generate candidate root lockfile
+        working-directory: source
+        run: cargo generate-lockfile
+
+      - name: Upload candidate root lockfile
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: tkda-main-server-pr35-cargo-lock
+          path: source/Cargo.lock
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Root formatting
+        working-directory: source
+        run: cargo fmt --check
+
+      - name: Root check
+        working-directory: source
+        run: cargo check --all-targets
+
+      - name: Root Clippy
+        working-directory: source
+        run: cargo clippy --all-targets -- -D warnings -A clippy::needless_return
+
+      - name: Root tests
+        working-directory: source
+        run: cargo test
+
+      - name: Rust worker formatting
+        working-directory: source
+        run: cargo fmt --manifest-path workers/rust/Cargo.toml --check
+
+      - name: Rust worker check
+        working-directory: source
+        run: cargo check --manifest-path workers/rust/Cargo.toml
+
+      - name: Rust worker Clippy
+        working-directory: source
+        run: cargo clippy --manifest-path workers/rust/Cargo.toml -- -D warnings -A clippy::needless_return
+
+      - name: Install Go
+        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        with:
+          go-version: "1.25.x"
+          cache: false
+
+      - name: Go formatting
+        run: test -z "$(gofmt -d source/workers/go)"
+
+      - name: Go build
+        working-directory: source/workers/go
+        run: go build ./...
+
+      - name: Verify source was not mutated except generated lockfile
+        working-directory: source
+        run: git diff --exit-code -- . ':(exclude)Cargo.lock'
