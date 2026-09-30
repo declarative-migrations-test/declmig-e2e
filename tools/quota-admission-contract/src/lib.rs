@@ -676,7 +676,7 @@ mod tests {
             let before = engine.snapshot();
             let key = format!("prop-{i}");
             let result = engine.admit(Request {
-                operation: if rng.next() % 5 == 0 {
+                operation: if rng.next().is_multiple_of(5) {
                     "expensive"
                 } else {
                     "default"
