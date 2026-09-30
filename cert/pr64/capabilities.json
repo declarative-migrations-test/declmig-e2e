@@ -214,7 +214,8 @@
       "process_generation_fallback_required": true,
       "code_middleware_routes_one_transaction": true,
       "native_dynamic_library_hot_swap_allowed": false,
-      "shared_drain_limits_with_hot_reload": true
+      "shared_drain_limits_with_hot_reload": true,
+      "in_process_certification_required": true
     }
   }
 }
