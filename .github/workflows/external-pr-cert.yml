@@ -268,7 +268,7 @@ jobs:
           fi
 
       - name: Check out exact PR 2 head
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: takoda-automation/tkda-orm-core
           ref: 5b5d5926bde58bcea4512042835e3f55dad99aeb
