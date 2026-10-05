@@ -1,0 +1,4 @@
+source_repository=ores-truffle-oreslang/oreslang-format
+source_head=f635019a798515743b8a1ca0b283b3d046643bba
+mirror_tree=dd26c9f656bd597fcd3eeb61bfa6b99dee6370bb
+verification=all 10 source blobs matched by git blob SHA before mirror commit
