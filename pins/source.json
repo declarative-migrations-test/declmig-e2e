@@ -1,7 +1,0 @@
-{
-  "schema_version": 1,
-  "source_repository": "declarative-migrations/declarative-postgres-migrate.rs",
-  "source_commit": "d2d1074bd9e8f10ddae98389aed328acf647bfa9",
-  "pinned_at": "2026-08-31",
-  "verification": "candidate-pr-47-cockroach-enum-qualification"
-}
