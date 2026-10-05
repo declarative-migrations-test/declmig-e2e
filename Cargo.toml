@@ -1,0 +1,26 @@
+[package]
+name = "oreslang-format"
+version = "0.1.0"
+edition = "2024"
+description = "The canonical formatter for Oreslang source files"
+license = "MIT"
+repository = "https://github.com/ores-truffle-oreslang/oreslang-format"
+keywords = ["oreslang", "formatter", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+name = "oreslang_format"
+path = "src/lib.rs"
+
+[[bin]]
+name = "oresfmt"
+path = "src/bin/oresfmt.rs"
+
+[[bin]]
+name = "oreslang-format"
+path = "src/bin/oreslang-format.rs"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
