@@ -1,0 +1,31 @@
+name: rustfmt-fix
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/oreslang-format-f635019-20261005
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: Commit rustfmt output
+        run: |
+          if git diff --quiet; then
+            echo "already formatted"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- '*.rs'
+          git commit -m "style: apply rustfmt for formatter certification"
+          git push
