@@ -1,37 +1,102 @@
-# Declarative Migrations aggregate E2E
+# oreslang-format
 
-This repository certifies an exact `declarative-postgres-migrate.rs` source commit. Its trust role is declared in `config/repository.json`:
+The canonical formatter for Oreslang source code.
 
-- `declarative-migrations-test/declmig-e2e` coordinates candidate, destructive, failure-injection, engine, permission, and cross-repository conformance against ephemeral or explicitly disposable targets.
-- `declarative-migrations/declmig-e2e` consumes exact immutable test-org evidence and gates stable release promotion. It never owns destructive targets.
+There is deliberately **one format and no style configuration**. The same Rust
+library powers the CLI, so editor integrations, CI, and local development use
+identical behavior.
 
-## Required certification checks
+## Canonical style
 
-The `Declarative migrations aggregate E2E` workflow runs five required jobs:
+- two spaces per indentation level;
+- LF line endings, no trailing whitespace, one final newline;
+- at most one ordinary blank line;
+- **two blank lines between sibling executable function/routine/method declarations**;
+- executable declarations and method implementations use the slim arrow `->`;
+- interface/trait callable signatures use the type-level fat arrow `=>`;
+- class headers keep `as` after the complete inheritance/conformance clause:
 
-1. `contract` validates the repository identity, mode, full source commit SHA, production-credential prohibition, fixtures, and configuration digests.
-2. `postgres-smoke` checks out that exact source revision, runs its library/property tests, builds the `dpm` binary, and performs the shared migration state machine against PostgreSQL 17.
-3. `postgres-lease-invariant` proves statement-boundary lease ownership and reviewed-plan serialization against PostgreSQL.
-4. `cockroach-smoke` independently builds the same source revision and performs the same state machines against CockroachDB 25.2.4.
-5. `dual-engine-parity` verifies both evidence bundles, compares portable plan operations and catalog signatures, and proves that apply plus idempotent replay converged without losing seeded rows.
+```ores
+define class User extends Entity implements Named, Serializable as
+  pub val String name;
 
-Each portable scenario runs `diff` → `verify` → `apply` → execute migrated behavior → empty post-apply diff → replay → empty post-replay diff. The bootstrap scenario covers new tables, identity columns, primary/unique/foreign-key constraints, ordinary and partial expression indexes, a view, a PL/pgSQL function, a stored procedure, and a row-level trigger. The object-evolution scenario mutates existing enum, sequence, column, constraint, index, view, function, procedure, and trigger-dependent state while checking generated-column backfill, defaults, constraint rejection, routine behavior, and preserved rows. See [the dual-engine audit](docs/dual-engine-audit.md) for findings, coverage, and deliberate engine-specific boundaries.
+  pub render() -> String {
+    return self.name;
+  }
+end
+```
 
-Formatting and strict Clippy remain source-repository quality gates. The aggregate harness intentionally does not reformat an immutable historical tree with a newer moving formatter; source commits may be pinned only after their required source CI passes. This repository owns black-box integration and promotion evidence.
+The nesting engine understands `module`, `class`, `interface`, `trait`,
+`struct`, actor/braced bodies, `end`, `if`/`fi`, and `do`/`done`. In particular,
+`implements Foo, Bar` never creates formatter nesting; the class body begins
+only after the class header and is closed by its matching `end`.
 
-Evidence is written under `artifacts/` and uploaded with exact source/workflow commits, the digest-pinned database engine identity, test/build logs, the `dpm` binary SHA-256, migration artifact digests, data-preservation and rejection assertions, and portable bootstrap/evolution catalog signatures. The parity job requires the complete artifact set, rejects paths outside each evidence root, and verifies every digest before comparing engines. Failure runs upload diagnostics separately and never masquerade as passing evidence. Generated evidence and checked-out source are ignored locally and must not be committed.
+The formatter is intentionally conservative about grammar that is still
+changing: it does not reorder declarations, imports, traits, interfaces, or
+class conformance lists.
 
-## Source updates
+## CLI
 
-Update `pins/source.json` only through a pull request. `source_commit` must be a full lowercase 40-character commit SHA. Never replace it with a branch, tag, abbreviated SHA, or `latest` selector. A pin update must link the source repository’s successful required checks.
+```bash
+cargo install --path .
 
-## Trust boundaries
+# default: preview only, never modify files
+oresfmt src examples
+# would format src/foo.ores
 
-- Pull-request workflows receive no environment or cloud secrets.
-- Checkout credentials are not persisted.
-- GitHub Actions, the Rust toolchain, PostgreSQL, and CockroachDB images are immutable pins.
-- The test repository may target only ephemeral or explicitly disposable databases; the aggregate smoke contract fails closed unless its admin and disposable target URLs use the same loopback endpoint.
-- The production repository may consume only exact immutable evidence from the test aggregate.
-- Product service conformance requires one `*-lib-core` persistence authority, API-owned product writes, bounded database-enforced web reads, isolated web-state writes, migrator-only DDL, and Shared Auth without product-domain database ownership.
+# explicit in-place rewrite
+oresfmt --write src examples
 
-See `config/repository.json`, `pins/source.json`, and `.github/workflows/e2e.yml` for the machine-enforced contract.
+# CI / pre-commit mode; exits 1 if anything would change
+oresfmt --check .
+
+# stdin -> stdout
+oresfmt - < input.ores
+
+# one file -> stdout
+oresfmt --stdout example.ores
+```
+
+The installed binary is `oresfmt`; `oreslang-format` is also provided as an
+alias. Directories are walked recursively and only `.ores` files are selected.
+
+### Safe writes
+
+Filesystem inputs are **dry-run by default**. `--write` is the only normal mode
+that modifies files, and it performs a full preflight before touching any file.
+This prevents a later unsafe path from leaving a project half-formatted.
+
+For every file that would change, `--write` fails closed when the file is:
+
+- tracked by Git but has staged or unstaged changes;
+- untracked or ignored;
+- outside a Git worktree.
+
+The overrides are intentionally explicit:
+
+```bash
+oresfmt --write --ok-to-mod-dirty-files src
+oresfmt --write --ok-to-mod-untracked-files generated
+oresfmt --write --ok-to-mod-outside-git /tmp/example.ores
+```
+
+These flags only relax write-safety checks. They do not change formatting style.
+
+## Rust SDK
+
+```rust
+use oreslang_format::{format_source, is_formatted};
+
+let formatted = format_source(source)?;
+let clean = is_formatted(&formatted)?;
+assert!(clean);
+```
+
+`format_source` is idempotent: formatting canonical output again produces the
+same bytes.
+
+## Why no configuration?
+
+Oreslang should have one mechanically enforceable source style. This avoids
+project-specific formatter drift and gives compiler diagnostics, generated
+code, examples, editor integrations, and code review the same layout contract.
