@@ -84,16 +84,53 @@ jobs:
           grep -F 'Verify exact source checkout' "$private"
 
           desktop=.github/workflows/desktop-fleet-certification.yml
-          test "$(grep -Fc 'token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}' "$desktop")" -ge 3
+          test "$(grep -F 'token:' "$desktop" | grep -Fc 'FLEET_GITHUB_READ_TOKEN')" -ge 3
 
           external=.github/workflows/external-pr-cert.yml
-          test "$(grep -Fc 'token: ${{ secrets.FLEET_GITHUB_READ_TOKEN }}' "$external")" -ge 5
+          test "$(grep -F 'token:' "$external" | grep -Fc 'FLEET_GITHUB_READ_TOKEN')" -ge 5
           test "$(grep -Fc 'Require private fleet read credential' "$external")" -eq 3
+
+          secret_expr_prefix="se""crets."
+          for workflow in .github/workflows/*.yml; do
+            if grep -Fq 'pull_request:' "$workflow" && grep -Fq "$secret_expr_prefix" "$workflow"; then
+              echo "$workflow is pull_request-triggered and references a repository secret" >&2
+              exit 1
+            fi
+          done
 
           consumer="$(sed -n '/^  consumer-infra:/,$p' "$desktop")"
           require_line="$(printf '%s\n' "$consumer" | grep -n -m1 'Require private fleet read credential' | cut -d: -f1)"
           checkout_line="$(printf '%s\n' "$consumer" | grep -n -m1 'Check out exact product infra head' | cut -d: -f1)"
           test "$require_line" -lt "$checkout_line"
+
+      - name: Enforce public carrier source boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          grep -Fx 'snapshots/' .gitignore
+          grep -F 'Never copy, vendor, mirror, snapshot, or commit source code from a private repository here' AGENTS.md
+
+          if git ls-files 'snapshots/**' | grep -q .; then
+            echo "tracked snapshots/ content is forbidden in this public carrier" >&2
+            git ls-files 'snapshots/**' >&2
+            exit 1
+          fi
+
+          risky_fixture_sources="$(
+            while IFS= read -r path; do
+              case "$path" in
+                *.rs|*.go|*.c|*.cc|*.cpp|*.cxx|*.h|*.hpp|*.m|*.mm|*.cs|*.fs|*.fsx|*.java|*.kt|*.kts|*.scala|*.clj|*.cljs|*.swift|*.zig|*.pony|*.erl|*.hrl|*.ex|*.exs|*.gleam|*.py|*.rb|*.php|*.lua|*.r|*.js|*.jsx|*.mjs|*.cjs|*.ts|*.tsx|*.dart|*.wasm|*.wat|*.sh|*.bash|*.zsh|*.ps1)
+                  printf '%s\n' "$path"
+                  ;;
+              esac
+            done < <(git ls-files 'fixtures/**')
+          )"
+          if [ -n "$risky_fixture_sources" ]; then
+            echo "application source under fixtures/ is forbidden in this public carrier" >&2
+            printf '%s\n' "$risky_fixture_sources" >&2
+            exit 1
+          fi
 
       - name: Verify clean tracked state
         shell: bash

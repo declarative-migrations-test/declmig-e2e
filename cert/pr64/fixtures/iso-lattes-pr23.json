@@ -1,0 +1,63 @@
+{
+  "schema": "ores.desktop-hot-reload/v1",
+  "product": "iso-lattes",
+  "default": {
+    "route_backend": "native_atomic",
+    "middleware_code_reload": "process_generation",
+    "front_proxy": "none",
+    "proxy_managed_application_routes": false,
+    "route_drain_timeout_ms": 300000,
+    "max_old_generations": 2
+  },
+  "supported_front_proxies": [
+    "none",
+    "nginx",
+    "haproxy",
+    "caddy"
+  ],
+  "supported_route_backends": [
+    "beam",
+    "native_atomic",
+    "external_process",
+    "wasm_generation",
+    "nginx_worker_generation",
+    "haproxy_runtime",
+    "caddy_admin"
+  ],
+  "supported_middleware_code_reload": [
+    "beam_hot_code",
+    "process_generation",
+    "wasm_generation",
+    "declarative_only"
+  ],
+  "invariants": {
+    "routing_middleware_separate_from_compute": true,
+    "route_change_restarts_standalone_server": false,
+    "route_change_restarts_lambda_workers": false,
+    "arbitrary_native_middleware_in_router_process": false,
+    "bounded_old_generation_drain": true
+  },
+  "rationale": "V8 isolates are the intended managed in-process code boundary, but side-by-side generation staging, pre-activation health checks, atomic generation routing, request pinning, bounded drain, rollback, and process-wide fault containment are not yet certified end to end. Auto therefore fails closed to supervised process_generation until conformance evidence exists.",
+  "release_activation": {
+    "runtime_family": "v8_isolate",
+    "preferred_strategy": "in_process_generation",
+    "fallback_strategy": "process_generation",
+    "allow_native_dynamic_library_hot_swap": false,
+    "code_middleware_routes_one_transaction": true,
+    "drain_timeout_ms": 300000,
+    "max_old_generations": 2,
+    "capabilities": {
+      "supports_process_generation": true,
+      "supports_in_process_generation": false,
+      "in_process_generation_certified": false,
+      "supports_parallel_generations": false,
+      "supports_pre_activation_health_check": false,
+      "supports_atomic_activation": false,
+      "supports_inflight_generation_pinning": false,
+      "supports_graceful_drain": false,
+      "supports_generation_rollback": false,
+      "supports_generation_fault_containment": false,
+      "code_loading_boundary": "v8_isolate"
+    }
+  }
+}

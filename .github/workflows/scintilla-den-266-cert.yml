@@ -27,14 +27,10 @@ jobs:
         with:
           toolchain: "1.90.0"
           components: rustfmt, clippy
-      - name: Generate deterministic lockfile
-        run: cargo +1.90.0 generate-lockfile
-      - name: Publish lock candidate
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
-        with:
-          name: scintilla-cargo-lock
-          path: fixtures/scintilla-desktop-daemon/Cargo.lock
-          if-no-files-found: error
+      - name: Verify committed lockfile
+        run: |
+          test -s Cargo.lock
+          cargo +1.90.0 fetch --locked
       - name: Format
         run: cargo +1.90.0 fmt --all -- --check
       - name: Clippy

@@ -1,0 +1,54 @@
+name: PR64 release-policy exact-source certification
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr64-release-policy-cert-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out funded carrier
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Verify exact source blobs
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git hash-object cert/pr64/policy/src/lib.rs)" = "1169c6de472ef0191e118297a5186af1d037da57"
+          test "$(git hash-object cert/pr64/infra/src/reload.rs)" = "0af8c038598c4b3ca8f76f2094a31a5b38b6662f"
+          test "$(git hash-object cert/pr64/capabilities.json)" = "888524d9bda5d5c189bb1ab20f08ccab995fc809"
+          jq -e '.capabilities["release-activation-policy"].transaction_authority == "runtime-generation/rust"' cert/pr64/capabilities.json >/dev/null
+          jq -e '.capabilities["release-activation-policy"].selection_mode == "capability-negotiated-fail-closed"' cert/pr64/capabilities.json >/dev/null
+          jq -e '.capabilities["release-activation-policy"].shared_drain_limits_with_hot_reload == true' cert/pr64/capabilities.json >/dev/null
+          jq -e '.capabilities["release-activation-policy"].in_process_certification_required == true' cert/pr64/capabilities.json >/dev/null
+          printf '%s\n' "policy_head=74525b033a48c4a97657e6e36f8c810efa4678f0"
+      - name: Install Rust 1.82
+        uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30
+        with:
+          toolchain: 1.82.0
+          components: rustfmt,clippy
+      - name: Generate dependency lock
+        working-directory: cert/pr64
+        run: cargo generate-lockfile
+      - name: Check formatting
+        working-directory: cert/pr64
+        run: rustfmt --edition 2021 --check policy/src/lib.rs
+      - name: Check workspace
+        working-directory: cert/pr64
+        run: cargo check --workspace --all-targets
+      - name: Clippy
+        working-directory: cert/pr64
+        run: cargo clippy --workspace --all-targets -- -D warnings -A clippy::needless_return
+      - name: Test
+        working-directory: cert/pr64
+        run: cargo test --workspace --all-targets
